@@ -11,7 +11,7 @@ namespace cmudb {
  */
 bool BPlusTreePage::IsLeafPage() const
 {
-	return page_type_ == LEAF_PAGE;
+	return page_type_ == IndexPageType::LEAF_PAGE;
 }
 bool BPlusTreePage::IsRootPage() const
 {
