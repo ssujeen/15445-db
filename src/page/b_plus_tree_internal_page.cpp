@@ -18,7 +18,19 @@ namespace cmudb {
  */
 INDEX_TEMPLATE_ARGUMENTS
 void B_PLUS_TREE_INTERNAL_PAGE_TYPE::Init(page_id_t page_id,
-                                          page_id_t parent_id) {}
+                                          page_id_t parent_id)
+{
+	// 8 byte aligned even though the header is 20 bytes
+	const size_t header_size = 24;
+	const size_t sz = PAGE_SIZE - header_size;
+	const size_t elems = (sz / sizeof(MappingType)) - 1;
+
+	SetPageType(IndexPageType::INTERNAL_PAGE);
+	SetPageId(page_id);
+	SetParentPageId(parent_id);
+	SetMaxSize(elems);
+	SetSize(0);
+}
 /*
  * Helper method to get/set the key associated with input "index"(a.k.a
  * array offset)
@@ -27,11 +39,20 @@ INDEX_TEMPLATE_ARGUMENTS
 KeyType B_PLUS_TREE_INTERNAL_PAGE_TYPE::KeyAt(int index) const {
   // replace with your own code
   KeyType key;
+
+  if (index < 0 || index >= GetSize())
+	  throw std::invalid_argument("index out of range");
+  key = array[index].first;
   return key;
 }
 
 INDEX_TEMPLATE_ARGUMENTS
-void B_PLUS_TREE_INTERNAL_PAGE_TYPE::SetKeyAt(int index, const KeyType &key) {}
+void B_PLUS_TREE_INTERNAL_PAGE_TYPE::SetKeyAt(int index, const KeyType &key)
+{
+	if (index < 0 || index >= GetSize())
+		throw std::invalid_argument("index out of range");
+	array[index].first = key;
+}
 
 /*
  * Helper method to find and return array index(or offset), so that its value
@@ -39,7 +60,16 @@ void B_PLUS_TREE_INTERNAL_PAGE_TYPE::SetKeyAt(int index, const KeyType &key) {}
  */
 INDEX_TEMPLATE_ARGUMENTS
 int B_PLUS_TREE_INTERNAL_PAGE_TYPE::ValueIndex(const ValueType &value) const {
-  return 0;
+	// TODO: why do we need this??
+
+	for (int idx = 0; idx < GetSize(); idx++)
+	{
+		if (array[idx].second == value)
+			return idx;
+	}
+
+	// idx not found
+	assert (false);
 }
 
 /*
@@ -47,8 +77,20 @@ int B_PLUS_TREE_INTERNAL_PAGE_TYPE::ValueIndex(const ValueType &value) const {
  * offset)
  */
 INDEX_TEMPLATE_ARGUMENTS
-ValueType B_PLUS_TREE_INTERNAL_PAGE_TYPE::ValueAt(int index) const { return 0; }
+ValueType B_PLUS_TREE_INTERNAL_PAGE_TYPE::ValueAt(int index) const
+{
+	if (index < 0 || index >= GetSize())
+		throw std::invalid_argument("index out of range");
+	return array[index].second;
+}
 
+INDEX_TEMPLATE_ARGUMENTS
+const MappingType &B_PLUS_TREE_INTERNAL_PAGE_TYPE::GetItem(int index) {
+  // replace with your own code
+  if ((index < 0) || (index >= GetSize()))
+	  throw std::invalid_argument("received invalid index");
+  return array[index];
+}
 /*****************************************************************************
  * LOOKUP
  *****************************************************************************/
@@ -60,8 +102,41 @@ ValueType B_PLUS_TREE_INTERNAL_PAGE_TYPE::ValueAt(int index) const { return 0; }
 INDEX_TEMPLATE_ARGUMENTS
 ValueType
 B_PLUS_TREE_INTERNAL_PAGE_TYPE::Lookup(const KeyType &key,
-                                       const KeyComparator &comparator) const {
-  return INVALID_PAGE_ID;
+	const KeyComparator &comparator) const
+{
+	// lookup in internal node is a bit different.
+	// we need to find the smallest key that is >= 'key'
+	// the 0th index for key is invalid
+	assert (GetSize() > 1);
+
+	int low = 1;
+	int high = GetSize() - 1;
+	int mid = (low + ((high - low) / 2));
+	ValueType val;
+
+	while (low <= high)
+	{
+		if (comparator(key, array[mid].first) == 0)
+		{
+			val = array[mid].second;
+			return val;
+		}
+		else if (comparator(key, array[mid].first) < 0)
+		{
+			high = mid -1;
+		}
+		else if (comparator(key, array[mid].first) > 0)
+		{
+			low = mid + 1;
+		}
+
+		mid = (low + ((high - low) / 2));
+	}
+
+	// (low - 1) contains the appropriate value
+	val = array[low - 1].second;
+
+	return val;
 }
 
 /*****************************************************************************
@@ -76,7 +151,19 @@ B_PLUS_TREE_INTERNAL_PAGE_TYPE::Lookup(const KeyType &key,
 INDEX_TEMPLATE_ARGUMENTS
 void B_PLUS_TREE_INTERNAL_PAGE_TYPE::PopulateNewRoot(
     const ValueType &old_value, const KeyType &new_key,
-    const ValueType &new_value) {}
+    const ValueType &new_value)
+{
+	// the page has to be new and also already initialized before
+	// calling this function.
+	assert (GetSize() == 0);
+	// key at index 0 is invalid
+	array[0].second = old_value;
+	array[1].first = new_key;
+	array[1].second = new_value;
+
+	// update the size to 2
+	SetSize(2);
+}
 /*
  * Insert new_key & new_value pair right after the pair with its value ==
  * old_value
@@ -86,7 +173,24 @@ INDEX_TEMPLATE_ARGUMENTS
 int B_PLUS_TREE_INTERNAL_PAGE_TYPE::InsertNodeAfter(
     const ValueType &old_value, const KeyType &new_key,
     const ValueType &new_value) {
-  return 0;
+
+	// make sure we have enough space
+	// although this insertion can cause a split
+
+	assert (GetSize() <= GetMaxSize());
+	const int idx = ValueIndex(old_value);
+
+	const int eltsToMove = (GetSize() - 1 - idx) * sizeof(MappingType);
+	if (eltsToMove)
+	{
+		memmove(&array[idx+1], &array[idx+2], eltsToMove);
+	}
+
+	array[idx+1].first = new_key;
+	array[idx+1].second = new_value;
+
+	IncreaseSize(1);
+    return (GetMaxSize() - GetSize()) * sizeof(MappingType);
 }
 
 /*****************************************************************************
@@ -98,11 +202,35 @@ int B_PLUS_TREE_INTERNAL_PAGE_TYPE::InsertNodeAfter(
 INDEX_TEMPLATE_ARGUMENTS
 void B_PLUS_TREE_INTERNAL_PAGE_TYPE::MoveHalfTo(
     BPlusTreeInternalPage *recipient,
-    BufferPoolManager *buffer_pool_manager) {}
+    BufferPoolManager *buffer_pool_manager)
+{
+	assert (GetSize() > 1);
+	const int mid = GetSize() / 2;
+	const int high = GetSize();
+	MappingType* const items = &array[mid];
+	recipient->CopyHalfFrom(items, high - mid, buffer_pool_manager);
+
+	SetSize(mid);
+}
 
 INDEX_TEMPLATE_ARGUMENTS
 void B_PLUS_TREE_INTERNAL_PAGE_TYPE::CopyHalfFrom(
-    MappingType *items, int size, BufferPoolManager *buffer_pool_manager) {}
+    MappingType *items, int size, BufferPoolManager *buffer_pool_manager)
+{
+	// ensure that we don't cause an overflow
+	const int currElements = GetSize();
+	// make sure when we copy stuff from another page due to a  split
+	// the split page should have 0 elements
+	assert (currElements == 0);
+	assert (currElements + size < GetMaxSize());
+	MappingType* src = &array[currElements];
+	for (int i = 0; i < size; i++)
+	{
+		src[i] = items[i];
+	}
+
+	IncreaseSize(size);
+}
 
 /*****************************************************************************
  * REMOVE
@@ -113,7 +241,16 @@ void B_PLUS_TREE_INTERNAL_PAGE_TYPE::CopyHalfFrom(
  * NOTE: store key&value pair continuously after deletion
  */
 INDEX_TEMPLATE_ARGUMENTS
-void B_PLUS_TREE_INTERNAL_PAGE_TYPE::Remove(int index) {}
+void B_PLUS_TREE_INTERNAL_PAGE_TYPE::Remove(int index)
+{
+	assert (GetSize() > 0);
+	const int sz = (GetSize() - 1 - index) * sizeof(MappingType);
+	assert (sz >= 0);
+
+	if (sz)
+		memmove(&array[index+1], &array[index], sz);
+	IncreaseSize(-1);
+}
 
 /*
  * Remove the only key & value pair in internal page and return the value
@@ -121,7 +258,11 @@ void B_PLUS_TREE_INTERNAL_PAGE_TYPE::Remove(int index) {}
  */
 INDEX_TEMPLATE_ARGUMENTS
 ValueType B_PLUS_TREE_INTERNAL_PAGE_TYPE::RemoveAndReturnOnlyChild() {
-  return INVALID_PAGE_ID;
+	assert (GetSize() == 1); // the key is dummy
+	ValueType value = array[0].second;
+	SetSize(0);
+
+	return value;
 }
 /*****************************************************************************
  * MERGE
@@ -133,11 +274,37 @@ ValueType B_PLUS_TREE_INTERNAL_PAGE_TYPE::RemoveAndReturnOnlyChild() {
 INDEX_TEMPLATE_ARGUMENTS
 void B_PLUS_TREE_INTERNAL_PAGE_TYPE::MoveAllTo(
     BPlusTreeInternalPage *recipient, int index_in_parent,
-    BufferPoolManager *buffer_pool_manager) {}
+    BufferPoolManager *buffer_pool_manager)
+{
+	const int elemCount = GetSize();
+
+	assert (elemCount > 0);
+	recipient->CopyAllFrom(array, elemCount, buffer_pool_manager);
+	SetSize(0);
+	// always merge with the left sibling
+	// once the merge is done, we need to remove the key/value pair
+	// from the parent
+	// TODO
+}
 
 INDEX_TEMPLATE_ARGUMENTS
 void B_PLUS_TREE_INTERNAL_PAGE_TYPE::CopyAllFrom(
-    MappingType *items, int size, BufferPoolManager *buffer_pool_manager) {}
+    MappingType *items, int size, BufferPoolManager *buffer_pool_manager)
+{
+	// TODO: why do we need a buffer pool manager here??
+	// make sure we don't overflow
+	assert (GetSize() + size <= GetMaxSize());
+
+	// ensure that we move only from the right sibling to the left
+	// or else we would mess the order
+	MappingType* const arr = &array[GetSize()];
+	for (int idx = 0; idx < size; idx++)
+	{
+		arr[idx] = items[idx];
+	}
+
+	IncreaseSize(size);
+}
 
 /*****************************************************************************
  * REDISTRIBUTE
@@ -149,11 +316,31 @@ void B_PLUS_TREE_INTERNAL_PAGE_TYPE::CopyAllFrom(
 INDEX_TEMPLATE_ARGUMENTS
 void B_PLUS_TREE_INTERNAL_PAGE_TYPE::MoveFirstToEndOf(
     BPlusTreeInternalPage *recipient,
-    BufferPoolManager *buffer_pool_manager) {}
+    BufferPoolManager *buffer_pool_manager)
+{
+	// this should only be called when trying to move a k-v pair from
+	// the right sibling to the left sibling
+	assert(GetSize() > 0);
+	const MappingType item = GetItem(0);
+
+	recipient->CopyLastFrom(item, buffer_pool_manager);
+	IncreaseSize(-1);
+
+	// need to resize
+	memmove(&array[0], &array[1], GetSize() * sizeof(MappingType));
+
+}
 
 INDEX_TEMPLATE_ARGUMENTS
 void B_PLUS_TREE_INTERNAL_PAGE_TYPE::CopyLastFrom(
-    const MappingType &pair, BufferPoolManager *buffer_pool_manager) {}
+    const MappingType &pair, BufferPoolManager *buffer_pool_manager)
+{
+	const int sz = GetSize();
+	assert (sz < GetMaxSize());
+
+	array[sz] = pair;
+	IncreaseSize(1);
+}
 
 /*
  * Remove the last key & value pair from this page to head of "recipient"
@@ -162,12 +349,34 @@ void B_PLUS_TREE_INTERNAL_PAGE_TYPE::CopyLastFrom(
 INDEX_TEMPLATE_ARGUMENTS
 void B_PLUS_TREE_INTERNAL_PAGE_TYPE::MoveLastToFrontOf(
     BPlusTreeInternalPage *recipient, int parent_index,
-    BufferPoolManager *buffer_pool_manager) {}
+    BufferPoolManager *buffer_pool_manager)
+{
+	// this should only happen from the left sibling to the right sibling
+	// to preserve order
+	const int sz = GetSize();
+	assert (sz > 0);
+
+	auto elem = GetItem(sz - 1);
+	recipient->CopyFirstFrom(elem, parent_index, buffer_pool_manager);
+	IncreaseSize(-1);
+
+	// TODO: update in the parent
+}
 
 INDEX_TEMPLATE_ARGUMENTS
 void B_PLUS_TREE_INTERNAL_PAGE_TYPE::CopyFirstFrom(
     const MappingType &pair, int parent_index,
-    BufferPoolManager *buffer_pool_manager) {}
+    BufferPoolManager *buffer_pool_manager)
+{
+	const int sz = GetSize();
+	assert ((sz > 1) && (sz < GetMaxSize()));
+
+	memmove(&array[1], &array[0], sz * sizeof(MappingType));
+	array[0] = pair;
+	IncreaseSize(1);
+
+	// TODO: update the parent index's key
+}
 
 /*****************************************************************************
  * DEBUG

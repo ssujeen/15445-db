@@ -35,6 +35,7 @@ public:
   void SetKeyAt(int index, const KeyType &key);
   int ValueIndex(const ValueType &value) const;
   ValueType ValueAt(int index) const;
+  const MappingType& GetItem(int index);
 
   ValueType Lookup(const KeyType &key, const KeyComparator &comparator) const;
   void PopulateNewRoot(const ValueType &old_value, const KeyType &new_key,

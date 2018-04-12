@@ -137,7 +137,7 @@ int B_PLUS_TREE_LEAF_PAGE_TYPE::Insert(const KeyType &key,
 
 	// insert idx is at low, we need to shift [low, GetSize()) to
 	// [low + 1, GetSize()] and insert the element at low
-	const int eltsToCopy = GetSize() - low;
+	const int eltsToCopy = (GetSize() - low) * sizeof(MappingType);
 	memmove(&array[low + 1], &array[low], eltsToCopy);
 	array[low].first = key;
 	array[low].second = value;
@@ -287,7 +287,7 @@ int B_PLUS_TREE_LEAF_PAGE_TYPE::RemoveAndDeleteRecord(
 
 	// delete idx is at mid we need to copy [mid+1, GetSize)
 	// to [mid, GetSize() - 1)
-	const int eltsToCopy = GetSize() - mid - 1;
+	const int eltsToCopy = (GetSize() - mid - 1) * sizeof(MappingType);
 	memmove(&array[mid], &array[mid + 1], eltsToCopy);
 	IncreaseSize(-1);
 
@@ -369,7 +369,7 @@ void B_PLUS_TREE_LEAF_PAGE_TYPE::MoveFirstToEndOf(
 	IncreaseSize(-1);
 
 	// need to resize
-	memmove(&array[0], &array[1], GetSize());
+	memmove(&array[0], &array[1], GetSize() * sizeof(MappingType));
 
 	// define a new function in internal node to handle this
 	// TODO: find the key item.first in the parent and replace it with
@@ -401,9 +401,10 @@ void B_PLUS_TREE_LEAF_PAGE_TYPE::MoveLastToFrontOf(
 	assert (sz > 0);
 
 	auto elem = GetItem(sz - 1);
-	recipient->CopyFirstFrom(elem, static_cast<page_id_t>(GetParentPageId()),
-		buffer_pool_manager);
+	recipient->CopyFirstFrom(elem, parentIndex, buffer_pool_manager);
 	IncreaseSize(-1);
+
+	// TODO: update in the parent
 }
 
 INDEX_TEMPLATE_ARGUMENTS
@@ -414,13 +415,11 @@ void B_PLUS_TREE_LEAF_PAGE_TYPE::CopyFirstFrom(
 	const int sz = GetSize();
 	assert ((sz > 1) && (sz < GetMaxSize()));
 
-	memmove(&array[1], &array[0], sz);
+	memmove(&array[1], &array[0], sz * sizeof(MappingType));
 	array[0] = item;
 	IncreaseSize(1);
 
-	// define a new function in the internal node to handle this
-	// TODO: find the key array[1].first in the parent and replace it with
-	// array[0].first
+	// TODO: update the parent index's key
 }
 
 /*****************************************************************************
