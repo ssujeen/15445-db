@@ -36,6 +36,7 @@ public:
   int ValueIndex(const ValueType &value) const;
   ValueType ValueAt(int index) const;
   const MappingType& GetItem(int index);
+  page_id_t Convert(ValueType value);
 
   ValueType Lookup(const KeyType &key, const KeyComparator &comparator) const;
   void PopulateNewRoot(const ValueType &old_value, const KeyType &new_key,

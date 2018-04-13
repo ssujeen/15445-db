@@ -40,7 +40,53 @@ INDEX_TEMPLATE_ARGUMENTS
 bool BPLUSTREE_TYPE::GetValue(const KeyType &key,
                               std::vector<ValueType> &result,
                               Transaction *transaction) {
-  return false;
+
+	// in the bplus tree we only know the root page id
+	// the root could also be a leaf node if it is is the only leaf node
+	// so it is better to cast it to BPlusTreePage* first before recasting
+	// it specifically
+
+	page_id_t page_id;
+	page_id = root_page_id_;
+	BPlusTreePage* pg = reinterpret_cast<BPlusTreePage*>
+		(buffer_pool_manager_->FetchPage(page_id));
+
+	// lookup doesn't trigger any writes
+	const bool is_dirty = false;
+	// for an internal node, we need to keep going down the tree
+	// till we hit the leaf node
+	while (pg->IsLeafPage() == false)
+	{
+		B_PLUS_TREE_INTERNAL_PAGE_TYPE* internal =
+			reinterpret_cast<B_PLUS_TREE_INTERNAL_PAGE_TYPE*>(pg);
+		ValueType val = internal->Lookup(key, comparator_);
+		// before reassigning internal, we need to unpin the page
+		buffer_pool_manager_->UnpinPage(page_id, is_dirty);
+		// for an internal node, value is always of type page_id_t
+
+		// convert to page_id_t
+		page_id = internal->Convert(val);
+		pg = reinterpret_cast<BPlusTreePage*>
+			(buffer_pool_manager_->FetchPage(page_id));
+	}
+
+	B_PLUS_TREE_LEAF_PAGE_TYPE* const leaf =
+		reinterpret_cast<B_PLUS_TREE_LEAF_PAGE_TYPE*>(pg);
+	// find the key in the leaf is simple, just need to do a binary
+	// search
+	ValueType val;
+	if (leaf->Lookup(key, val, comparator_) == false)
+	{
+		// key not found
+		// unpin the page before returning
+		buffer_pool_manager_->UnpinPage(page_id, is_dirty);
+		return false;
+	}
+
+	// key found, append to vector
+	result.push_back(val);
+	buffer_pool_manager_->UnpinPage(page_id, is_dirty);
+	return true;
 }
 
 /*****************************************************************************
@@ -55,8 +101,28 @@ bool BPLUSTREE_TYPE::GetValue(const KeyType &key,
  */
 INDEX_TEMPLATE_ARGUMENTS
 bool BPLUSTREE_TYPE::Insert(const KeyType &key, const ValueType &value,
-                            Transaction *transaction) {
-  return false;
+                            Transaction *transaction)
+{
+	// empty tree
+	if (root_page_id_ == INVALID_PAGE_ID)
+	{
+		StartNewTree(key, value);
+		// when creating a new tree, we need to insert into the
+		// header page
+		UpdateRootPageId(static_cast<int>(true));
+		return true;
+	}
+
+	// save this and check later if the root page id changes
+	const page_id_t root_page_id = root_page_id_;
+	if (!InsertIntoLeaf(key, value, transaction))
+		return false;
+
+	// TODO: change later, just to fix compilation issues
+	if (root_page_id == root_page_id_)
+		return true;
+
+	return false;
 }
 /*
  * Insert constant key & value pair into an empty tree
@@ -65,7 +131,29 @@ bool BPLUSTREE_TYPE::Insert(const KeyType &key, const ValueType &value,
  * tree's root page id and insert entry directly into leaf page.
  */
 INDEX_TEMPLATE_ARGUMENTS
-void BPLUSTREE_TYPE::StartNewTree(const KeyType &key, const ValueType &value) {}
+void BPLUSTREE_TYPE::StartNewTree(const KeyType &key, const ValueType &value)
+{
+	// get a new page from the buffer pool manager
+	// mark it as a leaf page and call the Init()
+	page_id_t page_id = INVALID_PAGE_ID;
+	B_PLUS_TREE_LEAF_PAGE_TYPE* const leaf =
+		reinterpret_cast<B_PLUS_TREE_LEAF_PAGE_TYPE*>
+		(buffer_pool_manager_->NewPage(page_id));
+
+	if (leaf == nullptr)
+		throw std::runtime_error("unable to get a new page from buffer pool");
+
+	leaf->Init(page_id, INVALID_PAGE_ID);
+	leaf->Insert(key, value, comparator_);
+
+	// now that we have written to the page, we need to mark it as dirty
+	// and unpin the page
+	const bool is_dirty = true;
+	buffer_pool_manager_->UnpinPage(page_id, is_dirty);
+
+	// mark this page_id as the root
+	root_page_id_ = page_id;
+}
 
 /*
  * Insert constant key & value pair into leaf page
@@ -78,7 +166,50 @@ void BPLUSTREE_TYPE::StartNewTree(const KeyType &key, const ValueType &value) {}
 INDEX_TEMPLATE_ARGUMENTS
 bool BPLUSTREE_TYPE::InsertIntoLeaf(const KeyType &key, const ValueType &value,
                                     Transaction *transaction) {
-  return false;
+
+	// non-empty tree, we need to find the leaf node to insert
+	BPlusTreePage* pg = reinterpret_cast<BPlusTreePage*>
+		(buffer_pool_manager_->FetchPage(root_page_id_));
+	B_PLUS_TREE_INTERNAL_PAGE_TYPE* internal;
+	B_PLUS_TREE_LEAF_PAGE_TYPE* leaf;
+	// vector to unpin the internal pages at the end
+	std::vector<BPlusTreePage*> vec;
+	ValueType val;
+	page_id_t child;
+
+	while (pg->IsLeafPage() == false)
+	{
+		vec.push_back(pg);
+		internal = reinterpret_cast<B_PLUS_TREE_INTERNAL_PAGE_TYPE*>(pg);
+		val = internal->Lookup(key, comparator_);
+		child = internal->Convert(val);
+		pg = reinterpret_cast<BPlusTreePage*>
+			(buffer_pool_manager_->FetchPage(child));
+	}
+
+	// got the leaf page
+	leaf = reinterpret_cast<B_PLUS_TREE_LEAF_PAGE_TYPE*>(pg);
+	const int sz = leaf->Insert(key, value, comparator_);
+
+	if (sz == 0)
+	{
+		// need to split
+		B_PLUS_TREE_LEAF_PAGE_TYPE* const split_leaf = Split(leaf);
+		// if we are splitting, then we need to insert the first key
+		// in the split_leaf as the new key and the split_leaf's page_id
+		// in the parent
+		assert(split_leaf->GetSize() > 0);
+		const KeyType key = split_leaf->KeyAt(0);
+		InsertIntoParent(reinterpret_cast<BPlusTreePage*>(leaf),
+			key, reinterpret_cast<BPlusTreePage*>(split_leaf), transaction);
+	}
+
+	for (auto elem : vec)
+	{
+		buffer_pool_manager_->UnpinPage(elem->GetPageId(), false);
+	}
+
+	return true;
 }
 
 /*
@@ -89,7 +220,22 @@ bool BPLUSTREE_TYPE::InsertIntoLeaf(const KeyType &key, const ValueType &value,
  * of key & value pairs from input page to newly created page
  */
 INDEX_TEMPLATE_ARGUMENTS
-template <typename N> N *BPLUSTREE_TYPE::Split(N *node) { return nullptr; }
+template <typename N> N *BPLUSTREE_TYPE::Split(N *node)
+{
+	page_id_t page_id;
+
+	N* const split_node = reinterpret_cast<N*>
+		(buffer_pool_manager_->NewPage(page_id));
+
+	// the split node has the same parent as that of the node
+	split_node->Init(page_id, node->GetParentPageId());
+	node->MoveHalfTo(split_node, buffer_pool_manager_);
+	// once the split is done, the leaf and the split_leaf's writes
+	// are done, so we can unpin them.
+	buffer_pool_manager_->UnpinPage(split_node->GetPageId(), true);
+	buffer_pool_manager_->UnpinPage(node->GetPageId(), true);
+	return split_node;
+}
 
 /*
  * Insert key & value pair into internal page after split

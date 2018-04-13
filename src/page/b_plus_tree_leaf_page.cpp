@@ -26,9 +26,7 @@ void B_PLUS_TREE_LEAF_PAGE_TYPE::Init(page_id_t page_id, page_id_t parent_id)
 	const size_t header_size = 24; // 8 byte aligned
 	// calculate size to store the mapping array
 	const size_t sz = PAGE_SIZE - header_size;
-	// we subtract 1 from the elems to provide buffer space when we need
-	// to split on insert
-	const size_t elems = (sz / sizeof(MappingType)) - 1;
+	const size_t elems = (sz / sizeof(MappingType));
 
 	SetPageType(IndexPageType::LEAF_PAGE);
 	SetPageId(page_id);
@@ -109,7 +107,7 @@ int B_PLUS_TREE_LEAF_PAGE_TYPE::Insert(const KeyType &key,
 	int mid = (low + ((high - low) / 2));
 
 	// assume we can overflow which will cause a split subsequently
-	assert (GetSize() <= GetMaxSize());
+	assert (GetSize() < GetMaxSize());
 	while (low <= high)
 	{
 		// TODO: handle exception
@@ -138,7 +136,8 @@ int B_PLUS_TREE_LEAF_PAGE_TYPE::Insert(const KeyType &key,
 	// insert idx is at low, we need to shift [low, GetSize()) to
 	// [low + 1, GetSize()] and insert the element at low
 	const int eltsToCopy = (GetSize() - low) * sizeof(MappingType);
-	memmove(&array[low + 1], &array[low], eltsToCopy);
+	if (eltsToCopy)
+		memmove(&array[low + 1], &array[low], eltsToCopy);
 	array[low].first = key;
 	array[low].second = value;
 	IncreaseSize(1);
@@ -146,7 +145,7 @@ int B_PLUS_TREE_LEAF_PAGE_TYPE::Insert(const KeyType &key,
 	const int sz = GetSize();
 	const int maxSz = GetMaxSize();
 
-	// this will return a negative value if we need to split
+	// this will return 0 if we need to split
 	return (maxSz - sz) * sizeof(MappingType);
 }
 

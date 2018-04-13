@@ -23,7 +23,7 @@ void B_PLUS_TREE_INTERNAL_PAGE_TYPE::Init(page_id_t page_id,
 	// 8 byte aligned even though the header is 20 bytes
 	const size_t header_size = 24;
 	const size_t sz = PAGE_SIZE - header_size;
-	const size_t elems = (sz / sizeof(MappingType)) - 1;
+	const size_t elems = (sz / sizeof(MappingType));
 
 	SetPageType(IndexPageType::INTERNAL_PAGE);
 	SetPageId(page_id);
@@ -52,6 +52,12 @@ void B_PLUS_TREE_INTERNAL_PAGE_TYPE::SetKeyAt(int index, const KeyType &key)
 	if (index < 0 || index >= GetSize())
 		throw std::invalid_argument("index out of range");
 	array[index].first = key;
+}
+
+INDEX_TEMPLATE_ARGUMENTS
+page_id_t B_PLUS_TREE_INTERNAL_PAGE_TYPE::Convert(ValueType value)
+{
+	return static_cast<page_id_t>(value);
 }
 
 /*
@@ -177,7 +183,7 @@ int B_PLUS_TREE_INTERNAL_PAGE_TYPE::InsertNodeAfter(
 	// make sure we have enough space
 	// although this insertion can cause a split
 
-	assert (GetSize() <= GetMaxSize());
+	assert (GetSize() < GetMaxSize());
 	const int idx = ValueIndex(old_value);
 
 	const int eltsToMove = (GetSize() - 1 - idx) * sizeof(MappingType);
@@ -190,6 +196,7 @@ int B_PLUS_TREE_INTERNAL_PAGE_TYPE::InsertNodeAfter(
 	array[idx+1].second = new_value;
 
 	IncreaseSize(1);
+	// returns 0 if there is no space and we need to split
     return (GetMaxSize() - GetSize()) * sizeof(MappingType);
 }
 
