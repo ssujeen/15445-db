@@ -10,7 +10,7 @@
  *
  * Internal page format (keys are stored in increasing order):
  *  --------------------------------------------------------------------------
- * | HEADER | KEY(1)+PAGE_ID(1) | KEY(2)+PAGE_ID(2) | ... | KEY(n)+PAGE_ID(n) |
+ * | HEADER | CACHED_IDX|  KEY(1)+PAGE_ID(1) | KEY(2)+PAGE_ID(2) | ... | KEY(n)+PAGE_ID(n) |
  *  --------------------------------------------------------------------------
  */
 
@@ -38,12 +38,16 @@ public:
   const MappingType& GetItem(int index);
   page_id_t Convert(ValueType value);
 
-  ValueType Lookup(const KeyType &key, const KeyComparator &comparator) const;
+  ValueType Lookup(const KeyType &key, const KeyComparator &comparator);
   void PopulateNewRoot(const ValueType &old_value, const KeyType &new_key,
                        const ValueType &new_value);
   int InsertNodeAfter(const ValueType &old_value, const KeyType &new_key,
                       const ValueType &new_value);
   void Remove(int index);
+  uint32_t GetCachedSiblingIndex();
+  void SetCachedSiblingIndex(uint32_t idx);
+  uint32_t GetCachedCurrentIndex();
+  void SetCachedCurrentIndex(uint32_t idx);
   ValueType RemoveAndReturnOnlyChild();
 
   void MoveHalfTo(BPlusTreeInternalPage *recipient,
@@ -69,6 +73,9 @@ private:
                     BufferPoolManager *buffer_pool_manager);
   void CopyFirstFrom(const MappingType &pair, int parent_index,
                      BufferPoolManager *buffer_pool_manager);
+  // header size is 20 bytes + 4 bytes for cached value idx
+  uint32_t cached_sibling_idx_;
+  uint32_t cached_curr_idx_;
   MappingType array[0];
 };
 } // namespace cmudb

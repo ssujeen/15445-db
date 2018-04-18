@@ -71,7 +71,14 @@ private:
   void InsertIntoParent(BPlusTreePage *old_node, const KeyType &key,
                         BPlusTreePage *new_node,
                         Transaction *transaction = nullptr);
-
+  template<typename N>
+  void GetParentAndSibling(N* const node,
+  	BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator>* &parent,
+	N* &sibling);
+  template<typename N>
+  void PutParentAndSibling(
+  	BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator>* const parent,
+	N* const sibling, bool is_dirty);
   template <typename N> N *Split(N *node);
 
   template <typename N>

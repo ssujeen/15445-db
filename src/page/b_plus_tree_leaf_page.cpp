@@ -253,6 +253,7 @@ int B_PLUS_TREE_LEAF_PAGE_TYPE::RemoveAndDeleteRecord(
 	int low = 0;
 	int high = GetSize() - 1;
 	int mid = (low + ((high - low) / 2));
+	const int maxSz = GetMaxSize();
 
 	while (low <= high)
 	{
@@ -281,7 +282,7 @@ int B_PLUS_TREE_LEAF_PAGE_TYPE::RemoveAndDeleteRecord(
 
 	if (low > high) // we didn't find the elt
 	{
-		throw std::invalid_argument("unable to find elt to delete");
+		return (maxSz - GetSize()) * sizeof(MappingType);
 	}
 
 	// delete idx is at mid we need to copy [mid+1, GetSize)
@@ -291,7 +292,6 @@ int B_PLUS_TREE_LEAF_PAGE_TYPE::RemoveAndDeleteRecord(
 	IncreaseSize(-1);
 
 	const int sz = GetSize();
-	const int maxSz = GetMaxSize();
 
 	// decide to merge depending on this return value
 	return (maxSz - sz) * sizeof(MappingType);
