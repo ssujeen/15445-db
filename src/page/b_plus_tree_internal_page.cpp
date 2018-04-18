@@ -85,12 +85,6 @@ void B_PLUS_TREE_INTERNAL_PAGE_TYPE::SetKeyAt(int index, const KeyType &key)
 	array[index].first = key;
 }
 
-INDEX_TEMPLATE_ARGUMENTS
-page_id_t B_PLUS_TREE_INTERNAL_PAGE_TYPE::Convert(ValueType value)
-{
-	return static_cast<page_id_t>(value);
-}
-
 /*
  * Helper method to find and return array index(or offset), so that its value
  * equals to input "value"

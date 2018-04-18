@@ -60,15 +60,14 @@ bool BPLUSTREE_TYPE::GetValue(const KeyType &key,
 	// till we hit the leaf node
 	while (pg->IsLeafPage() == false)
 	{
-		B_PLUS_TREE_INTERNAL_PAGE_TYPE* internal =
-			reinterpret_cast<B_PLUS_TREE_INTERNAL_PAGE_TYPE*>(pg);
-		ValueType val = internal->Lookup(key, comparator_);
+		BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator>* internal =
+			reinterpret_cast<BPlusTreeInternalPage<KeyType, page_id_t,
+			KeyComparator>*>(pg);
+		page_id_t page_id = internal->Lookup(key, comparator_);
 		// before reassigning internal, we need to unpin the page
 		buffer_pool_manager_->UnpinPage(page_id, is_dirty);
 		// for an internal node, value is always of type page_id_t
 
-		// convert to page_id_t
-		page_id = internal->Convert(val);
 		Page* page_ptr = buffer_pool_manager_->FetchPage(page_id);
 		assert (page_ptr != nullptr);
 		pg = reinterpret_cast<BPlusTreePage*>(page_ptr->GetData());
@@ -170,19 +169,18 @@ bool BPLUSTREE_TYPE::InsertIntoLeaf(const KeyType &key, const ValueType &value,
 	Page* page_ptr = buffer_pool_manager_->FetchPage(root_page_id_);
 	assert (page_ptr != nullptr);
 	BPlusTreePage* pg = reinterpret_cast<BPlusTreePage*>(page_ptr->GetData());
-	B_PLUS_TREE_INTERNAL_PAGE_TYPE* internal;
+	BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator>* internal;
 	B_PLUS_TREE_LEAF_PAGE_TYPE* leaf;
 	// vector to unpin the internal pages at the end
 	std::vector<BPlusTreePage*> vec;
-	ValueType val;
 	page_id_t child;
 
 	while (pg->IsLeafPage() == false)
 	{
 		vec.push_back(pg);
-		internal = reinterpret_cast<B_PLUS_TREE_INTERNAL_PAGE_TYPE*>(pg);
-		val = internal->Lookup(key, comparator_);
-		child = internal->Convert(val);
+		internal = reinterpret_cast<BPlusTreeInternalPage<KeyType,
+			page_id_t, KeyComparator>*>(pg);
+		child = internal->Lookup(key, comparator_);
 		page_ptr = buffer_pool_manager_->FetchPage(child);
 		assert (page_ptr != nullptr);
 		pg = reinterpret_cast<BPlusTreePage*>(page_ptr->GetData());
@@ -328,19 +326,18 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key, Transaction *transaction)
 	Page* page_ptr = buffer_pool_manager_->FetchPage(root_page_id_);
 	assert (page_ptr != nullptr);
 	BPlusTreePage* pg = reinterpret_cast<BPlusTreePage*>(page_ptr->GetData());
-	B_PLUS_TREE_INTERNAL_PAGE_TYPE* internal;
+	BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator>* internal;
 	B_PLUS_TREE_LEAF_PAGE_TYPE* leaf;
 	// vector to unpin the internal pages at the end
 	std::vector<BPlusTreePage*> vec;
-	ValueType val;
 	page_id_t child;
 
 	while (pg->IsLeafPage() == false)
 	{
 		vec.push_back(pg);
-		internal = reinterpret_cast<B_PLUS_TREE_INTERNAL_PAGE_TYPE*>(pg);
-		val = internal->Lookup(key, comparator_);
-		child = internal->Convert(val);
+		internal = reinterpret_cast<BPlusTreeInternalPage<KeyType,
+			page_id_t, KeyComparator>*>(pg);
+		child = internal->Lookup(key, comparator_);
 		page_ptr = buffer_pool_manager_->FetchPage(child);
 		assert (page_ptr != nullptr);
 		pg = reinterpret_cast<BPlusTreePage*>(page_ptr->GetData());
@@ -396,10 +393,7 @@ void BPLUSTREE_TYPE::GetParentAndSibling(N* const node,
 		(page_ptr->GetData());
 	const uint32_t sibling_idx = parent->GetCachedSiblingIndex();
 	assert (sibling_idx != static_cast<uint32_t>(-1));
-	const ValueType val = parent->ValueAt(sibling_idx);
-	const page_id_t sibling_id =
-		reinterpret_cast<B_PLUS_TREE_INTERNAL_PAGE_TYPE*>
-		(parent)->Convert(val);
+	const page_id_t sibling_id = parent->ValueAt(sibling_idx);
 	assert (sibling_id != INVALID_PAGE_ID);
 	page_ptr = buffer_pool_manager_->FetchPage(sibling_id);
 	assert (page_ptr != nullptr);
