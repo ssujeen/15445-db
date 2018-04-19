@@ -329,14 +329,14 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key, Transaction *transaction)
 	BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator>* internal;
 	B_PLUS_TREE_LEAF_PAGE_TYPE* leaf;
 	// vector to unpin the internal pages at the end
-	std::vector<BPlusTreePage*> vec;
+	std::stack<BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator>*> vec;
 	page_id_t child;
 
 	while (pg->IsLeafPage() == false)
 	{
-		vec.push_back(pg);
 		internal = reinterpret_cast<BPlusTreeInternalPage<KeyType,
 			page_id_t, KeyComparator>*>(pg);
+		vec.push(internal);
 		child = internal->Lookup(key, comparator_);
 		page_ptr = buffer_pool_manager_->FetchPage(child);
 		assert (page_ptr != nullptr);
@@ -349,11 +349,15 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key, Transaction *transaction)
 	const int thresh = (leaf->GetMaxSize() >> 1);
 
 	// no parent and leaf's size is 0, which means empty tree
-	if (leaf->GetParentPageId() == INVALID_PAGE_ID &&
-		leaf->GetSize() == 0)
+	if (leaf->GetParentPageId() == INVALID_PAGE_ID)
 	{
-		if (AdjustRoot(reinterpret_cast<BPlusTreePage*>(leaf)))
+		if (leaf->GetSize() == 0)
+		{
+			assert (AdjustRoot(reinterpret_cast<BPlusTreePage*>(leaf)) == true);
 			return;
+		}
+		buffer_pool_manager_->UnpinPage(leaf->GetPageId(), true);
+		return;
 	}
 
 	// handle leaf node with valid parent specifically
@@ -363,44 +367,47 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key, Transaction *transaction)
 		if (CoalesceOrRedistribute(leaf, transaction))
 		{
 			// coalesce
-			BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator>* parent;
+			auto parent = vec.top();
+			vec.pop();
 			B_PLUS_TREE_LEAF_PAGE_TYPE* sibling;
 			int keyIdx;
 			bool root_del = false;
 
-			GetParentSiblingAndKeyIdx(leaf, parent, sibling, keyIdx);
+			GetSiblingAndKeyIdx(leaf, parent, sibling, keyIdx);
 			assert((parent != nullptr) && (sibling != nullptr));
 			assert (keyIdx < parent->GetSize());
 			if (Coalesce(sibling, leaf, parent, keyIdx, transaction))
 			{
 				// parent node needs to be deleted
 				assert (parent->GetParentPageId() == INVALID_PAGE_ID);
-				PutParentAndSibling(parent, sibling, true);
+				PutSibling(sibling, true);
 				AdjustRoot(reinterpret_cast<BPlusTreePage*>(parent));
 				root_del = true;
 			}
 			else
 			{
 				// we might need to recursively coalesce or redistribute
-				PutParentAndSibling(parent, sibling, true);
+				PutSibling(sibling, true);
 				auto curr = parent;
 				BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator>* sib;
 
 				while (CoalesceOrRedistribute(curr, transaction))
 				{
-					GetParentSiblingAndKeyIdx(curr, parent, sib, keyIdx);
+					parent = vec.top();
+					vec.pop();
+					GetSiblingAndKeyIdx(curr, parent, sib, keyIdx);
 					assert((parent != nullptr) && (sib != nullptr));
 					assert (keyIdx < parent->GetSize());
 					if (Coalesce(sib, curr, parent, keyIdx, transaction))
 					{
 						assert(parent->GetParentPageId() == INVALID_PAGE_ID);
-						PutParentAndSibling(parent, sib, true);
+						PutSibling(sib, true);
 						AdjustRoot(reinterpret_cast<BPlusTreePage*>(parent));
 						root_del = true;
 						break;
 					}
 
-					PutParentAndSibling(parent, sib, true);
+					PutSibling(sib, true);
 					curr = parent;
 				}
 
@@ -417,9 +424,14 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key, Transaction *transaction)
 		}
 	}
 
+	// no need for coalesce/redistribute is also handled here
 	// cleanup
-	for (auto elem : vec)
+	while (vec.empty() == false)
+	{
+		auto elem = vec.top();
+		vec.pop();
 		buffer_pool_manager_->UnpinPage(elem->GetPageId(), true);
+	}
 	buffer_pool_manager_->UnpinPage(leaf->GetPageId(), true);
 }
 
@@ -428,22 +440,16 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key, Transaction *transaction)
  */
 INDEX_TEMPLATE_ARGUMENTS
 template <typename N>
-void BPLUSTREE_TYPE::GetParentSiblingAndKeyIdx(N* const node,
+void BPLUSTREE_TYPE::GetSiblingAndKeyIdx(N* const node,
 	BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator>* &parent,
 	N* &sibling, int &keyIdx)
 {
-	const page_id_t parent_id = node->GetParentPageId();
-	Page* page_ptr = buffer_pool_manager_->FetchPage(parent_id);
-	assert (page_ptr != NULL);
-	parent = reinterpret_cast<
-		BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator>*>
-		(page_ptr->GetData());
 	const uint32_t sibling_idx = parent->GetCachedSiblingIndex();
 	const uint32_t currIdx = parent->GetCachedCurrentIndex();
 	assert (sibling_idx != static_cast<uint32_t>(-1));
 	const page_id_t sibling_id = parent->ValueAt(sibling_idx);
 	assert (sibling_id != INVALID_PAGE_ID);
-	page_ptr = buffer_pool_manager_->FetchPage(sibling_id);
+	auto page_ptr = buffer_pool_manager_->FetchPage(sibling_id);
 	assert (page_ptr != nullptr);
 	sibling = reinterpret_cast<N*>(page_ptr->GetData());
 	keyIdx = (sibling_idx > currIdx) ? sibling_idx : currIdx;
@@ -451,11 +457,8 @@ void BPLUSTREE_TYPE::GetParentSiblingAndKeyIdx(N* const node,
 
 INDEX_TEMPLATE_ARGUMENTS
 template<typename N>
-void BPLUSTREE_TYPE::PutParentAndSibling(
-	BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator>* const parent,
-	N* const sibling, bool is_dirty)
+void BPLUSTREE_TYPE::PutSibling(N* const sibling, bool is_dirty)
 {
-	buffer_pool_manager_->UnpinPage(parent->GetPageId(), is_dirty);
 	buffer_pool_manager_->UnpinPage(sibling->GetPageId(), is_dirty);
 }
 /*
@@ -469,16 +472,19 @@ INDEX_TEMPLATE_ARGUMENTS
 template <typename N>
 bool BPLUSTREE_TYPE::CoalesceOrRedistribute(N *node, Transaction *transaction)
 {
-	BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator>* parent = nullptr;
 	N* sibling = nullptr;
 	int keyIdx;
-
-	GetParentSiblingAndKeyIdx(node, parent, sibling, keyIdx);
+	auto page_ptr = buffer_pool_manager_->FetchPage(node->GetParentPageId());
+	assert (page_ptr != nullptr);
+	auto parent = reinterpret_cast<BPlusTreeInternalPage<KeyType, page_id_t,
+	KeyComparator>*>(page_ptr);
+	GetSiblingAndKeyIdx(node, parent, sibling, keyIdx);
 	assert (keyIdx < parent->GetSize());
-	assert(parent != nullptr && sibling != nullptr);
+	assert(sibling != nullptr);
 	const int eltCount = node->GetSize();
 	const int space = sibling->GetMaxSize() - sibling->GetSize();
-	PutParentAndSibling(parent, sibling, false);
+	PutSibling(sibling, false);
+	buffer_pool_manager_->UnpinPage(parent->GetPageId(), false);
 	return (eltCount <= space);
 }
 
@@ -505,7 +511,7 @@ bool BPLUSTREE_TYPE::Coalesce(
 	// we always move from right to left so that the next_page_id in leaf
 	// gets updated properly
 
-	const page_id_t page_id = parent->ValueAt(idx);
+	const page_id_t page_id = parent->ValueAt(index);
 	if (page_id == neighbor_node->GetPageId())
 	{
 		// right sibling, move from sibling to node
