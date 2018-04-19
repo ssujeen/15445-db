@@ -323,11 +323,6 @@ void B_PLUS_TREE_LEAF_PAGE_TYPE::MoveAllTo(BPlusTreeLeafPage *recipient,
 	recipient->SetNextPageId(next_page_id);
 	// there is nothing here
 	SetSize(0);
-
-	// TODO: delete page from bufferpool maybe??
-	// also, generally when we copy stuff to a page, do we need to
-	// Pin the page and unpin the page after the operation??
-	// might need to do it!!!
 }
 
 INDEX_TEMPLATE_ARGUMENTS
