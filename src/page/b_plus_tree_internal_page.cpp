@@ -412,7 +412,7 @@ void B_PLUS_TREE_INTERNAL_PAGE_TYPE::MoveLastToFrontOf(
 	recipient->CopyFirstFrom(elem, parent_index, buffer_pool_manager);
 	IncreaseSize(-1);
 
-	// TODO: update in the parent
+	// ignore parent_index here, handle it in the upper layer
 }
 
 INDEX_TEMPLATE_ARGUMENTS

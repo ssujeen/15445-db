@@ -39,6 +39,7 @@ public:
   page_id_t GetNextPageId() const;
   void SetNextPageId(page_id_t next_page_id);
   KeyType KeyAt(int index) const;
+  void SetKeyAt(int index, KeyType &key);
   int KeyIndex(const KeyType &key, const KeyComparator &comparator) const;
   const MappingType &GetItem(int index);
 

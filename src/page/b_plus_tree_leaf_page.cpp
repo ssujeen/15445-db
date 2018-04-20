@@ -76,6 +76,14 @@ KeyType B_PLUS_TREE_LEAF_PAGE_TYPE::KeyAt(int index) const {
   return key;
 }
 
+INDEX_TEMPLATE_ARGUMENTS
+void B_PLUS_TREE_LEAF_PAGE_TYPE::SetKeyAt(int index, KeyType &key)
+{
+  if ((index < 0) || (index >= GetSize()))
+	  throw std::invalid_argument("received invalid index");
+
+  array[index].first = key;
+}
 /*
  * Helper method to find and return the key & value pair associated with input
  * "index"(a.k.a array offset)

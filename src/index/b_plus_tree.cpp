@@ -343,6 +343,12 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key, Transaction *transaction)
 		pg = reinterpret_cast<BPlusTreePage*>(page_ptr->GetData());
 	}
 
+	while (vec.empty() == false)
+	{
+		auto elem = vec.top();
+		vec.pop();
+		buffer_pool_manager_->UnpinPage(elem->GetPageId(), false);
+	}
 	// got the leaf page
 	leaf = reinterpret_cast<B_PLUS_TREE_LEAF_PAGE_TYPE*>(pg);
 	const int sz = leaf->RemoveAndDeleteRecord(key, comparator_);
@@ -351,7 +357,7 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key, Transaction *transaction)
 	// no parent and leaf's size is 0, which means empty tree
 	if (leaf->GetParentPageId() == INVALID_PAGE_ID)
 	{
-		if (leaf->GetSize() == 0)
+		if (sz == 0)
 		{
 			assert (AdjustRoot(reinterpret_cast<BPlusTreePage*>(leaf)) == true);
 			return;
@@ -360,79 +366,60 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key, Transaction *transaction)
 		return;
 	}
 
+	if (leaf->GetParentPageId() != INVALID_PAGE_ID
+		&& (sz >= thresh))
+	{
+		// no need to coalesce/redistribute
+		buffer_pool_manager_->UnpinPage(leaf->GetPageId(), true);
+		return;
+	}
+
+	// handle the coalesce/redistribute case
 	// handle leaf node with valid parent specifically
-	if ((leaf->GetParentPageId() != INVALID_PAGE_ID)
-		&& (leaf->GetSize() < thresh))
+	const bool delete_node = CoalesceOrRedistribute(leaf, transaction);
+	// return true implies we need to delete the leaf
+	const page_id_t leaf_id = leaf->GetPageId();
+	// but before that let's get the parent
+	page_id_t curr_id = leaf->GetParentPageId();
+	if (delete_node)
 	{
-		if (CoalesceOrRedistribute(leaf, transaction))
-		{
-			// coalesce
-			auto parent = vec.top();
-			vec.pop();
-			B_PLUS_TREE_LEAF_PAGE_TYPE* sibling;
-			int keyIdx;
-			bool root_del = false;
-
-			GetSiblingAndKeyIdx(leaf, parent, sibling, keyIdx);
-			assert((parent != nullptr) && (sibling != nullptr));
-			assert (keyIdx < parent->GetSize());
-			if (Coalesce(sibling, leaf, parent, keyIdx, transaction))
-			{
-				// parent node needs to be deleted
-				assert (parent->GetParentPageId() == INVALID_PAGE_ID);
-				PutSibling(sibling, true);
-				AdjustRoot(reinterpret_cast<BPlusTreePage*>(parent));
-				root_del = true;
-			}
-			else
-			{
-				// we might need to recursively coalesce or redistribute
-				PutSibling(sibling, true);
-				auto curr = parent;
-				BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator>* sib;
-
-				while (CoalesceOrRedistribute(curr, transaction))
-				{
-					parent = vec.top();
-					vec.pop();
-					GetSiblingAndKeyIdx(curr, parent, sib, keyIdx);
-					assert((parent != nullptr) && (sib != nullptr));
-					assert (keyIdx < parent->GetSize());
-					if (Coalesce(sib, curr, parent, keyIdx, transaction))
-					{
-						assert(parent->GetParentPageId() == INVALID_PAGE_ID);
-						PutSibling(sib, true);
-						AdjustRoot(reinterpret_cast<BPlusTreePage*>(parent));
-						root_del = true;
-						break;
-					}
-
-					PutSibling(sib, true);
-					curr = parent;
-				}
-
-
-				if (!root_del)
-				{
-					// redistribute
-				}
-			}
-		}
-		else
-		{
-			// redistribute
-		}
+		buffer_pool_manager_->UnpinPage(leaf_id, false);
+		buffer_pool_manager_->DeletePage(leaf_id);
+	}
+	else
+	{
+		buffer_pool_manager_->UnpinPage(leaf_id, true);
 	}
 
-	// no need for coalesce/redistribute is also handled here
-	// cleanup
-	while (vec.empty() == false)
+	while (curr_id != INVALID_PAGE_ID)
 	{
-		auto elem = vec.top();
-		vec.pop();
-		buffer_pool_manager_->UnpinPage(elem->GetPageId(), true);
+		auto page_ptr = buffer_pool_manager_->FetchPage(curr_id);
+		assert (page_ptr != nullptr);
+		auto curr = reinterpret_cast<BPlusTreeInternalPage<KeyType,
+			page_id_t, KeyComparator>*>(page_ptr->GetData());
+		const int thresh = curr->GetMaxSize() >> 1;
+		// root
+		const bool root_exit = (curr->GetParentPageId() == INVALID_PAGE_ID)
+			&& (curr->GetSize() >= 2);
+		const bool internal_exit = (curr->GetParentPageId() != INVALID_PAGE_ID)
+			&& (curr->GetSize() >= thresh);
+
+		if (root_exit || internal_exit)
+		{
+			buffer_pool_manager_->UnpinPage(curr_id, true);
+			break;
+		}
+		const bool delete_node = CoalesceOrRedistribute(curr,
+			transaction);
+		const page_id_t next_id = curr->GetParentPageId();
+		if (delete_node)
+		{
+			buffer_pool_manager_->UnpinPage(curr_id, false);
+			buffer_pool_manager_->DeletePage(curr_id);
+		}
+
+		curr_id = next_id;
 	}
-	buffer_pool_manager_->UnpinPage(leaf->GetPageId(), true);
 }
 
 /*
@@ -477,15 +464,111 @@ bool BPLUSTREE_TYPE::CoalesceOrRedistribute(N *node, Transaction *transaction)
 	auto page_ptr = buffer_pool_manager_->FetchPage(node->GetParentPageId());
 	assert (page_ptr != nullptr);
 	auto parent = reinterpret_cast<BPlusTreeInternalPage<KeyType, page_id_t,
-	KeyComparator>*>(page_ptr);
+	KeyComparator>*>(page_ptr->GetData());
 	GetSiblingAndKeyIdx(node, parent, sibling, keyIdx);
 	assert (keyIdx < parent->GetSize());
 	assert(sibling != nullptr);
 	const int eltCount = node->GetSize();
 	const int space = sibling->GetMaxSize() - sibling->GetSize();
-	PutSibling(sibling, false);
-	buffer_pool_manager_->UnpinPage(parent->GetPageId(), false);
-	return (eltCount <= space);
+	const bool coalesce = (eltCount <= space);
+	bool delete_node = false;
+	page_id_t parent_id = parent->GetPageId();
+	const page_id_t page_id = parent->ValueAt(keyIdx);
+
+	if (coalesce)
+	{
+		N* src;
+		N* dst;
+		if (page_id == sibling->GetPageId())
+		{
+			// right sibling, move from sibling to node
+			// node is not deleted
+			dst = node;
+			src = sibling;
+		}
+		else
+		{
+			// left sibling, move from node to sibling
+			dst = sibling;
+			src = node;
+			delete_node = true;
+		}
+		if (Coalesce(dst, src, parent, keyIdx, transaction))
+		{
+			// parent needs to be deleted
+			assert (parent->GetParentPageId() == INVALID_PAGE_ID);
+			AdjustRoot(reinterpret_cast<BPlusTreePage*>(parent));
+			// update the parent in the dst and src
+			dst->SetParentPageId(INVALID_PAGE_ID);
+			src->SetParentPageId(INVALID_PAGE_ID);
+			parent_id = INVALID_PAGE_ID;
+		}
+
+		if (!delete_node)
+		{
+			// copied to node
+			// avoid potential race by caching sibling id
+			const page_id_t sibling_id = sibling->GetPageId();
+			PutSibling(sibling, false);
+			buffer_pool_manager_->DeletePage(sibling_id);
+		}
+		else
+		{
+			// copied to sibling
+			PutSibling(sibling, true);
+		}
+		// cleanup
+		if (parent_id != INVALID_PAGE_ID)
+			buffer_pool_manager_->UnpinPage(parent_id, true);
+	}
+	else
+	{
+		// redistribute
+		int idx;
+		if (page_id == sibling->GetPageId())
+		{
+			// right sibling, we need to borrow the first elt in
+			// the sibling to the node
+			idx = 0;
+		}
+		else
+		{
+			// left sibling, we need to borrow the last elt from the
+			// sibling to the node
+			idx = 1;
+		}
+
+		Redistribute(sibling, node, idx);
+
+		if (node->IsLeafPage() == false)
+		{
+			// internal node redistribute
+			if (idx == 0)
+			{
+				// we have moved the first elt in the sibling to the node
+				// but the first elt has a dummy key. the actual key that
+				// is the key at parent's keyIdx
+				// the parent's key at keyIdx is no longer valid because
+				// of the redistribute, so use the key at index 0 of the node
+				KeyType key = parent->KeyAt(keyIdx);
+				KeyType parentKey = sibling->KeyAt(0);
+				node->SetKeyAt(node->GetSize() - 1, key);
+				parent->SetKeyAt(keyIdx, parentKey);
+			}
+			else
+			{
+				// we have moved the last elt in the sibling to the node
+				// we just need to update the parent
+				KeyType parentKey = node->KeyAt(0);
+				parent->SetKeyAt(keyIdx, parentKey);
+			}
+		}
+		// cleanup
+		PutSibling(sibling, true);
+		buffer_pool_manager_->UnpinPage(parent->GetPageId(), true);
+	}
+
+	return delete_node;
 }
 
 /*
@@ -507,25 +590,15 @@ bool BPLUSTREE_TYPE::Coalesce(
     BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator> *&parent,
     int index, Transaction *transaction)
 {
-	// index is the key index
-	// we always move from right to left so that the next_page_id in leaf
-	// gets updated properly
+	if (node->IsLeafPage() == false)
+	{
+		// for internal node, key at index 0 is dummy
+		// we need to populate it with the key at index in the parent
+		KeyType key = parent->KeyAt(index);
+		node->SetKeyAt(0, key);
 
-	const page_id_t page_id = parent->ValueAt(index);
-	if (page_id == neighbor_node->GetPageId())
-	{
-		// right sibling, move from sibling to node
-		neighbor_node->MoveAllTo(node, -1, nullptr);
-		buffer_pool_manager_->UnpinPage(neighbor_node->GetPageId(), false);
-		buffer_pool_manager_->DeletePage(neighbor_node->GetPageId());
 	}
-	else
-	{
-		// left sibling, move from node to sibling
-		node->MoveAllTo(neighbor_node, -1, nullptr);
-		buffer_pool_manager_->UnpinPage(node->GetPageId(), false);
-		buffer_pool_manager_->DeletePage(node->GetPageId());
-	}
+	node->MoveAllTo(neighbor_node, -1, nullptr);
 
 	parent->Remove(index);
 	if (parent->GetParentPageId() == INVALID_PAGE_ID && parent->GetSize() == 1)
@@ -545,7 +618,13 @@ bool BPLUSTREE_TYPE::Coalesce(
  */
 INDEX_TEMPLATE_ARGUMENTS
 template <typename N>
-void BPLUSTREE_TYPE::Redistribute(N *neighbor_node, N *node, int index) {}
+void BPLUSTREE_TYPE::Redistribute(N *neighbor_node, N *node, int index)
+{
+	if (index == 0)
+		neighbor_node->MoveFirstToEndOf(node, buffer_pool_manager_);
+	else
+		neighbor_node->MoveLastToFrontOf(node, index, buffer_pool_manager_);
+}
 /*
  * Update root page if necessary
  * NOTE: size of root page can be less than min size and this method is only
