@@ -421,6 +421,10 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key, Transaction *transaction)
 			buffer_pool_manager_->UnpinPage(curr_id, false);
 			buffer_pool_manager_->DeletePage(curr_id);
 		}
+		else
+		{
+			buffer_pool_manager_->UnpinPage(curr_id, true);
+		}
 
 		curr_id = next_id;
 	}
@@ -521,9 +525,6 @@ bool BPLUSTREE_TYPE::CoalesceOrRedistribute(N *node, Transaction *transaction)
 			// copied to sibling
 			PutSibling(sibling, true);
 		}
-		// cleanup
-		if (parent_id != INVALID_PAGE_ID)
-			buffer_pool_manager_->UnpinPage(parent_id, true);
 	}
 	else
 	{
@@ -546,32 +547,51 @@ bool BPLUSTREE_TYPE::CoalesceOrRedistribute(N *node, Transaction *transaction)
 
 		if (node->IsLeafPage() == false)
 		{
-			// internal node redistribute
+			// for internal node we have to do additional work
+			KeyType key = parent->KeyAt(keyIdx);
 			if (idx == 0)
 			{
-				// we have moved the first elt in the sibling to the node
+				// we have moved the first elt in the right sibling to the node
 				// but the first elt has a dummy key. the actual key that
 				// is the key at parent's keyIdx
-				// the parent's key at keyIdx is no longer valid because
-				// of the redistribute, so use the key at index 0 of the node
-				KeyType key = parent->KeyAt(keyIdx);
-				KeyType parentKey = sibling->KeyAt(0);
 				node->SetKeyAt(node->GetSize() - 1, key);
-				parent->SetKeyAt(keyIdx, parentKey);
 			}
 			else
 			{
-				// we have moved the last elt in the sibling to the node
-				// we just need to update the parent
-				KeyType parentKey = node->KeyAt(0);
-				parent->SetKeyAt(keyIdx, parentKey);
+				// we have moved the last elt from left sibling
+				// we need to replace the dummy key in the node before
+				// the redistribute happened, with the key at the keyIdx
+				// in the parent
+				assert (node->GetSize() > 1);
+				node->SetKeyAt(1, key);
 			}
+		}
+		if (idx == 0)
+		{
+			// the parent's key at keyIdx is no longer valid because
+			// of the redistribute, so use the key at index 0 of the sibling
+			// note that we use the key at index 0, because, before the
+			// redistribute, the key would have been at index 1 which makes
+			// it a valid key
+			KeyType parentKey = sibling->KeyAt(0);
+			parent->SetKeyAt(keyIdx, parentKey);
+		}
+		else
+		{
+			// the parent's key at keyIdx is no longer valid because
+			// of the redistribute,so use the key at index 0 of the node
+			// we use this key at index 0, because, we got this from the last
+			// index in the left sibling which makes it a valid key
+			KeyType parentKey = node->KeyAt(0);
+			parent->SetKeyAt(keyIdx, parentKey);
 		}
 		// cleanup
 		PutSibling(sibling, true);
-		buffer_pool_manager_->UnpinPage(parent->GetPageId(), true);
 	}
 
+	// cleanup
+	if (parent_id != INVALID_PAGE_ID)
+		buffer_pool_manager_->UnpinPage(parent_id, true);
 	return delete_node;
 }
 

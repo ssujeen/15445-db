@@ -420,8 +420,6 @@ void B_PLUS_TREE_INTERNAL_PAGE_TYPE::CopyFirstFrom(
 	memmove(&array[1], &array[0], sz * sizeof(MappingType));
 	array[0] = pair;
 	IncreaseSize(1);
-
-	// TODO: update the parent index's key
 }
 
 /*****************************************************************************
