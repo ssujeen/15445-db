@@ -163,7 +163,8 @@ void BPLUSTREE_TYPE::StartNewTree(const KeyType &key, const ValueType &value)
  */
 INDEX_TEMPLATE_ARGUMENTS
 bool BPLUSTREE_TYPE::InsertIntoLeaf(const KeyType &key, const ValueType &value,
-                                    Transaction *transaction) {
+                                    Transaction *transaction)
+{
 
 	// non-empty tree, we need to find the leaf node to insert
 	Page* page_ptr = buffer_pool_manager_->FetchPage(root_page_id_);
@@ -302,6 +303,7 @@ void BPLUSTREE_TYPE::InsertIntoParent(BPlusTreePage *old_node,
 			// unpin
 			buffer_pool_manager_->UnpinPage(split_parent->GetPageId(), true);
 		}
+		buffer_pool_manager_->UnpinPage(parent->GetPageId(), true);
 	}
 }
 
@@ -411,6 +413,8 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key, Transaction *transaction)
 		}
 		const bool delete_node = CoalesceOrRedistribute(curr,
 			transaction);
+		// cache the next_id before delete the page to avoid
+		// potential race
 		const page_id_t next_id = curr->GetParentPageId();
 		if (delete_node)
 		{

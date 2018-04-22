@@ -143,6 +143,7 @@ int B_PLUS_TREE_LEAF_PAGE_TYPE::Insert(const KeyType &key,
 
 	// insert idx is at low, we need to shift [low, GetSize()) to
 	// [low + 1, GetSize()] and insert the element at low
+	assert (low <= GetSize());
 	const int eltsToCopy = (GetSize() - low) * sizeof(MappingType);
 	if (eltsToCopy)
 		memmove(&array[low + 1], &array[low], eltsToCopy);
@@ -172,9 +173,8 @@ void B_PLUS_TREE_LEAF_PAGE_TYPE::MoveHalfTo(
 	// needs to be atleast 2
 	assert(GetSize() > 1);
 	const int mid = GetSize() / 2;
-	const int high = GetSize();
 	MappingType* const items = &array[mid];
-	recipient->CopyHalfFrom(items, high - mid);
+	recipient->CopyHalfFrom(items, GetSize() - mid);
 
 	SetSize(mid);
 }
@@ -295,8 +295,9 @@ int B_PLUS_TREE_LEAF_PAGE_TYPE::RemoveAndDeleteRecord(
 
 	// delete idx is at mid we need to copy [mid+1, GetSize)
 	// to [mid, GetSize() - 1)
-	const int eltsToCopy = (GetSize() - mid - 1) * sizeof(MappingType);
-	memmove(&array[mid], &array[mid + 1], eltsToCopy);
+	const int eltsToCopy = (GetSize() - (mid + 1)) * sizeof(MappingType);
+	if (eltsToCopy)
+		memmove(&array[mid], &array[mid + 1], eltsToCopy);
 	IncreaseSize(-1);
 
 	const int sz = GetSize();

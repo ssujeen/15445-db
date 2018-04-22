@@ -91,8 +91,6 @@ void B_PLUS_TREE_INTERNAL_PAGE_TYPE::SetKeyAt(int index, const KeyType &key)
  */
 INDEX_TEMPLATE_ARGUMENTS
 int B_PLUS_TREE_INTERNAL_PAGE_TYPE::ValueIndex(const ValueType &value) const {
-	// TODO: why do we need this??
-
 	for (int idx = 0; idx < GetSize(); idx++)
 	{
 		if (array[idx].second == value)
@@ -231,7 +229,8 @@ int B_PLUS_TREE_INTERNAL_PAGE_TYPE::InsertNodeAfter(
 	assert (GetSize() < GetMaxSize());
 	const int idx = ValueIndex(old_value);
 
-	const int eltsToMove = (GetSize() - 1 - idx) * sizeof(MappingType);
+	// move elts from [idx + 1, GetSize())
+	const int eltsToMove = (GetSize() -  (idx + 1)) * sizeof(MappingType);
 	if (eltsToMove)
 	{
 		memmove(&array[idx+1], &array[idx+2], eltsToMove);
@@ -258,9 +257,8 @@ void B_PLUS_TREE_INTERNAL_PAGE_TYPE::MoveHalfTo(
 {
 	assert (GetSize() > 1);
 	const int mid = GetSize() / 2;
-	const int high = GetSize();
 	MappingType* const items = &array[mid];
-	recipient->CopyHalfFrom(items, high - mid, buffer_pool_manager);
+	recipient->CopyHalfFrom(items, GetSize() - mid, buffer_pool_manager);
 
 	SetSize(mid);
 }
@@ -296,7 +294,7 @@ INDEX_TEMPLATE_ARGUMENTS
 void B_PLUS_TREE_INTERNAL_PAGE_TYPE::Remove(int index)
 {
 	assert (GetSize() > 0);
-	const int sz = (GetSize() - 1 - index) * sizeof(MappingType);
+	const int sz = (GetSize() - (index + 1)) * sizeof(MappingType);
 	assert (sz >= 0);
 
 	if (sz)
@@ -333,10 +331,6 @@ void B_PLUS_TREE_INTERNAL_PAGE_TYPE::MoveAllTo(
 	assert (elemCount > 0);
 	recipient->CopyAllFrom(array, elemCount, buffer_pool_manager);
 	SetSize(0);
-	// always merge with the left sibling
-	// once the merge is done, we need to remove the key/value pair
-	// from the parent
-	// TODO
 }
 
 INDEX_TEMPLATE_ARGUMENTS
