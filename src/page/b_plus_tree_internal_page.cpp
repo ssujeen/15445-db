@@ -30,36 +30,6 @@ void B_PLUS_TREE_INTERNAL_PAGE_TYPE::Init(page_id_t page_id,
 	SetParentPageId(parent_id);
 	SetMaxSize(elems);
 	SetSize(0);
-	cached_sibling_idx_ = static_cast<uint32_t>(-1);
-	cached_curr_idx_ = static_cast<uint32_t>(-1);
-}
-
-// during lookup, cached the idx of the key that was followed.
-// useful during delete to find the sibling
-INDEX_TEMPLATE_ARGUMENTS
-uint32_t B_PLUS_TREE_INTERNAL_PAGE_TYPE::GetCachedSiblingIndex()
-{
-	return cached_sibling_idx_;
-}
-
-INDEX_TEMPLATE_ARGUMENTS
-void B_PLUS_TREE_INTERNAL_PAGE_TYPE::SetCachedSiblingIndex(uint32_t idx)
-{
-	assert (idx == static_cast<uint32_t>(-1));
-	cached_sibling_idx_ = idx;
-}
-
-INDEX_TEMPLATE_ARGUMENTS
-uint32_t B_PLUS_TREE_INTERNAL_PAGE_TYPE::GetCachedCurrentIndex()
-{
-	return cached_curr_idx_;
-}
-
-INDEX_TEMPLATE_ARGUMENTS
-void B_PLUS_TREE_INTERNAL_PAGE_TYPE::SetCachedCurrentIndex(uint32_t idx)
-{
-	assert (idx == static_cast<uint32_t>(-1));
-	cached_curr_idx_ = idx;
 }
 
 /*
@@ -151,8 +121,6 @@ B_PLUS_TREE_INTERNAL_PAGE_TYPE::Lookup(const KeyType &key,
 			// there will be atleast one value to the left of this
 			// idx
 			assert((mid - 1) >= 0);
-			cached_sibling_idx_ = mid - 1;
-			cached_curr_idx_ = mid;
 			return val;
 		}
 		else if (comparator(key, array[mid].first) < 0)
@@ -170,21 +138,6 @@ B_PLUS_TREE_INTERNAL_PAGE_TYPE::Lookup(const KeyType &key,
 	// (low - 1) contains the appropriate value
 	val = array[low - 1].second;
 	assert ((low - 1) >= 0);
-	if ((low - 1) == GetSize() - 1)
-	{
-		// if this is the last idx, then we use the left sibling
-		assert ((low - 2) >= 0);
-		cached_sibling_idx_ = low - 2;
-	}
-	else
-	{
-		// we use the right sibling by default
-		assert (low < GetSize());
-		cached_sibling_idx_ = low;
-	}
-	assert ((low - 1) >= 0);
-	cached_curr_idx_ = low - 1;
-
 	return val;
 }
 

@@ -439,15 +439,21 @@ void BPLUSTREE_TYPE::GetSiblingAndKeyIdx(N* const node,
 	BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator>* &parent,
 	N* &sibling, int &keyIdx)
 {
-	const uint32_t sibling_idx = parent->GetCachedSiblingIndex();
-	const uint32_t currIdx = parent->GetCachedCurrentIndex();
-	assert (sibling_idx != static_cast<uint32_t>(-1));
-	const page_id_t sibling_id = parent->ValueAt(sibling_idx);
+
+	const int32_t currIdx = parent->ValueIndex(node->GetPageId());
+	assert (currIdx >= 0 && currIdx < node->GetSize());
+	int32_t siblingIdx;
+	if (currIdx == node->GetSize() - 1)
+		siblingIdx = currIdx - 1;
+	else
+		siblingIdx = currIdx + 1;
+
+	const page_id_t sibling_id = parent->ValueAt(siblingIdx);
 	assert (sibling_id != INVALID_PAGE_ID);
 	auto page_ptr = buffer_pool_manager_->FetchPage(sibling_id);
 	assert (page_ptr != nullptr);
 	sibling = reinterpret_cast<N*>(page_ptr->GetData());
-	keyIdx = (sibling_idx > currIdx) ? sibling_idx : currIdx;
+	keyIdx = (siblingIdx > currIdx) ? siblingIdx : currIdx;
 }
 
 INDEX_TEMPLATE_ARGUMENTS
