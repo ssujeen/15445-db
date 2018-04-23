@@ -698,7 +698,37 @@ bool BPLUSTREE_TYPE::AdjustRoot(BPlusTreePage *old_root_node) {
  * @return : index iterator
  */
 INDEX_TEMPLATE_ARGUMENTS
-INDEXITERATOR_TYPE BPLUSTREE_TYPE::Begin() { return INDEXITERATOR_TYPE(); }
+INDEXITERATOR_TYPE BPLUSTREE_TYPE::Begin()
+{
+	if (root_page_id_ == INVALID_PAGE_ID)
+		return INDEXITERATOR_TYPE(nullptr, nullptr);
+
+	auto page_ptr = buffer_pool_manager_->FetchPage(root_page_id_);
+	assert (page_ptr != nullptr);
+	auto pg = reinterpret_cast<BPlusTreePage*>(page_ptr->GetData());
+	std::vector<BPlusTreePage*> vec;
+	BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator>* internal;
+	page_id_t child;
+
+	while (pg->IsLeafPage() == false)
+	{
+		vec.push_back(pg);
+		internal = reinterpret_cast<BPlusTreeInternalPage<KeyType,
+			page_id_t, KeyComparator>*>(pg);
+		child = internal->ValueAt(0);
+		page_ptr = buffer_pool_manager_->FetchPage(child);
+		assert (page_ptr != nullptr);
+		pg = reinterpret_cast<BPlusTreePage*>(page_ptr->GetData());
+	}
+
+	// got the leaf page
+	auto leaf = reinterpret_cast<B_PLUS_TREE_LEAF_PAGE_TYPE*>(pg);
+	// unpin everything except the leaf
+	for (auto elem : vec)
+		buffer_pool_manager_->UnpinPage(elem->GetPageId(), false);
+
+	return INDEXITERATOR_TYPE(leaf, buffer_pool_manager_);
+}
 
 /*
  * Input parameter is low key, find the leaf page that contains the input key
@@ -706,8 +736,36 @@ INDEXITERATOR_TYPE BPLUSTREE_TYPE::Begin() { return INDEXITERATOR_TYPE(); }
  * @return : index iterator
  */
 INDEX_TEMPLATE_ARGUMENTS
-INDEXITERATOR_TYPE BPLUSTREE_TYPE::Begin(const KeyType &key) {
-  return INDEXITERATOR_TYPE();
+INDEXITERATOR_TYPE BPLUSTREE_TYPE::Begin(const KeyType &key)
+{
+	if (root_page_id_ == INVALID_PAGE_ID)
+		return INDEXITERATOR_TYPE(nullptr, nullptr);
+
+	auto page_ptr = buffer_pool_manager_->FetchPage(root_page_id_);
+	assert (page_ptr != nullptr);
+	auto pg = reinterpret_cast<BPlusTreePage*>(page_ptr->GetData());
+	std::vector<BPlusTreePage*> vec;
+	BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator>* internal;
+	page_id_t child;
+
+	while (pg->IsLeafPage() == false)
+	{
+		vec.push_back(pg);
+		internal = reinterpret_cast<BPlusTreeInternalPage<KeyType,
+			page_id_t, KeyComparator>*>(pg);
+		child = internal->Lookup(key, comparator_);
+		page_ptr = buffer_pool_manager_->FetchPage(child);
+		assert (page_ptr != nullptr);
+		pg = reinterpret_cast<BPlusTreePage*>(page_ptr->GetData());
+	}
+
+	// got the leaf page
+	auto leaf = reinterpret_cast<B_PLUS_TREE_LEAF_PAGE_TYPE*>(pg);
+	// unpin everything except the leaf
+	for (auto elem : vec)
+		buffer_pool_manager_->UnpinPage(elem->GetPageId(), false);
+
+	return INDEXITERATOR_TYPE(leaf, buffer_pool_manager_);
 }
 
 /*****************************************************************************

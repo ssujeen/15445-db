@@ -20,8 +20,8 @@ INDEX_TEMPLATE_ARGUMENTS
 void B_PLUS_TREE_INTERNAL_PAGE_TYPE::Init(page_id_t page_id,
                                           page_id_t parent_id)
 {
-	// 8 byte aligned even though the header is 28 bytes
-	const size_t header_size = 32;
+	// 8 byte aligned
+	const size_t header_size = 24;
 	const size_t sz = PAGE_SIZE - header_size;
 	const size_t elems = (sz / sizeof(MappingType));
 
