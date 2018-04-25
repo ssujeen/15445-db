@@ -23,7 +23,8 @@ void B_PLUS_TREE_INTERNAL_PAGE_TYPE::Init(page_id_t page_id,
 	// 8 byte aligned
 	const size_t header_size = 24;
 	const size_t sz = PAGE_SIZE - header_size;
-	const size_t elems = (sz / sizeof(MappingType));
+	const size_t msize = sizeof(MappingType);
+	const size_t elems = (sz / msize);
 
 	SetPageType(IndexPageType::INTERNAL_PAGE);
 	SetPageId(page_id);
@@ -186,7 +187,7 @@ int B_PLUS_TREE_INTERNAL_PAGE_TYPE::InsertNodeAfter(
 	const int eltsToMove = (GetSize() -  (idx + 1)) * sizeof(MappingType);
 	if (eltsToMove)
 	{
-		memmove(&array[idx+1], &array[idx+2], eltsToMove);
+		memmove(&array[idx+2], &array[idx+1], eltsToMove);
 	}
 
 	array[idx+1].first = new_key;

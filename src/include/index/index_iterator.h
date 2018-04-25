@@ -15,7 +15,9 @@ INDEX_TEMPLATE_ARGUMENTS
 class IndexIterator {
 public:
   // you may define your own constructor based on your member variables
-  IndexIterator(B_PLUS_TREE_LEAF_PAGE_TYPE *pg, BufferPoolManager* bpm);
+  IndexIterator(B_PLUS_TREE_LEAF_PAGE_TYPE* pg, BufferPoolManager* bpm);
+  IndexIterator(B_PLUS_TREE_LEAF_PAGE_TYPE* pg, KeyType key,
+      KeyComparator comparator, BufferPoolManager* bpm);
   ~IndexIterator();
 
   bool isEnd();
@@ -25,7 +27,7 @@ public:
   IndexIterator &operator++()
   {
 	idx_++;
-	if (idx_ >= it_->GetSize())
+	if (idx_ >= it_->GetSize() && (it_->GetNextPageId() != INVALID_PAGE_ID))
 	{
 		auto page_ptr = buffer_pool_manager_->FetchPage(it_->GetNextPageId());
 		assert (page_ptr != nullptr);

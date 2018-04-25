@@ -21,6 +21,15 @@ INDEXITERATOR_TYPE::IndexIterator(B_PLUS_TREE_LEAF_PAGE_TYPE* pg,
 }
 
 INDEX_TEMPLATE_ARGUMENTS
+INDEXITERATOR_TYPE::IndexIterator(B_PLUS_TREE_LEAF_PAGE_TYPE* pg,
+	KeyType key, KeyComparator comparator, BufferPoolManager* bpm)
+{
+	it_ = pg;
+	idx_ = pg->KeyIndex(key, comparator);
+	buffer_pool_manager_ = bpm;
+}
+
+INDEX_TEMPLATE_ARGUMENTS
 INDEXITERATOR_TYPE::~IndexIterator()
 {
 	if (it_ != nullptr)
@@ -30,9 +39,9 @@ INDEXITERATOR_TYPE::~IndexIterator()
 INDEX_TEMPLATE_ARGUMENTS
 bool INDEXITERATOR_TYPE::isEnd()
 {
-	if (it_ == nullptr)
+	if (it_ == nullptr || idx_ == -1)
 		return true;
-	if (it_->GetNextPageId() == INVALID_PAGE_ID && (idx_ == it_->GetSize() - 1))
+	if (it_->GetNextPageId() == INVALID_PAGE_ID && (idx_ == it_->GetSize()))
 		return true;
 	return false;
 }

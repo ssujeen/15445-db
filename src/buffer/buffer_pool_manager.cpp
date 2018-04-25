@@ -146,6 +146,10 @@ bool BufferPoolManager::UnpinPage(page_id_t page_id, bool is_dirty) {
 		latch_.unlock();
 		return false;
 	}
+	// if the transition is from dirty->not dirty, we need to preserve
+	// the dirty bit
+	if (page->IsDirty() == true && is_dirty == false)
+		is_dirty = true;
 	page->SetDirty(is_dirty);
 	page->DecrementPinCount();
 

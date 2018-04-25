@@ -115,6 +115,7 @@ template <typename T> bool LRUReplacer<T>::Erase(const T &value) {
 		return false;
 	}
 
+	assert (extHash->Remove(value));
 	for (size_t i = idx + 1; i < vec.size(); i++)
 	{
 		extHash->Insert(vec[i], (i - 1));
