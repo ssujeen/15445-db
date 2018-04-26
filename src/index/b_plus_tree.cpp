@@ -4,6 +4,7 @@
 #include <iostream>
 #include <string>
 #include <stack>
+#include <queue>
 
 #include "common/exception.h"
 #include "common/logger.h"
@@ -373,13 +374,13 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key, Transaction *transaction)
 	}
 	// got the leaf page
 	leaf = reinterpret_cast<B_PLUS_TREE_LEAF_PAGE_TYPE*>(pg);
-	const int sz = leaf->RemoveAndDeleteRecord(key, comparator_);
-	const int thresh = (leaf->GetMaxSize() >> 1);
-
-	// no parent and leaf's size is 0, which means empty tree
+	const int avail_sz = leaf->RemoveAndDeleteRecord(key, comparator_);
+	const int thresh = (leaf->GetMaxSize() >> 1) * sizeof(MappingType);
+	const int max_sz = leaf->GetMaxSize() * sizeof(MappingType);
+	// if the available sz is the max, it means empty tree
 	if (leaf->GetParentPageId() == INVALID_PAGE_ID)
 	{
-		if (sz == 0)
+		if (avail_sz == max_sz)
 		{
 			assert (AdjustRoot(reinterpret_cast<BPlusTreePage*>(leaf)) == true);
 			return;
@@ -389,7 +390,7 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key, Transaction *transaction)
 	}
 
 	if (leaf->GetParentPageId() != INVALID_PAGE_ID
-		&& (sz >= thresh))
+		&& (avail_sz <= thresh))
 	{
 		// no need to coalesce/redistribute
 		buffer_pool_manager_->UnpinPage(leaf->GetPageId(), true);
@@ -461,9 +462,9 @@ void BPLUSTREE_TYPE::GetSiblingAndKeyIdx(N* const node,
 {
 
 	const int32_t currIdx = parent->ValueIndex(node->GetPageId());
-	assert (currIdx >= 0 && currIdx < node->GetSize());
+	assert (currIdx >= 0 && currIdx < parent->GetSize());
 	int32_t siblingIdx;
-	if (currIdx == node->GetSize() - 1)
+	if (currIdx == (parent->GetSize() - 1))
 		siblingIdx = currIdx - 1;
 	else
 		siblingIdx = currIdx + 1;
@@ -503,7 +504,9 @@ bool BPLUSTREE_TYPE::CoalesceOrRedistribute(N *node, Transaction *transaction)
 	assert (keyIdx < parent->GetSize());
 	assert(sibling != nullptr);
 	const int eltCount = node->GetSize();
-	const int space = sibling->GetMaxSize() - sibling->GetSize();
+	// subtract by 1 because if the eltcount is GetMaxSize(), then we need
+	// to split
+	const int space = sibling->GetMaxSize() - sibling->GetSize() - 1;
 	const bool coalesce = (eltCount <= space);
 	bool delete_node = false;
 	page_id_t parent_id = parent->GetPageId();
@@ -588,7 +591,6 @@ bool BPLUSTREE_TYPE::CoalesceOrRedistribute(N *node, Transaction *transaction)
 				// we need to replace the dummy key in the node before
 				// the redistribute happened, with the key at the keyIdx
 				// in the parent
-				assert (node->GetSize() > 1);
 				node->SetKeyAt(1, key);
 			}
 		}
@@ -648,7 +650,7 @@ bool BPLUSTREE_TYPE::Coalesce(
 		node->SetKeyAt(0, key);
 
 	}
-	node->MoveAllTo(neighbor_node, -1, nullptr);
+	node->MoveAllTo(neighbor_node, -1, buffer_pool_manager_);
 
 	parent->Remove(index);
 	if (parent->GetParentPageId() == INVALID_PAGE_ID && parent->GetSize() == 1)
@@ -705,6 +707,7 @@ bool BPLUSTREE_TYPE::AdjustRoot(BPlusTreePage *old_root_node) {
 		root_page_id_ = new_root_id;
 		buffer_pool_manager_->UnpinPage(old_root_node->GetPageId(), false);
 		buffer_pool_manager_->DeletePage(old_root_node->GetPageId());
+		return true;
 	}
     return false;
 }
@@ -827,7 +830,51 @@ void BPLUSTREE_TYPE::UpdateRootPageId(int insert_record) {
  * print out whole b+tree sturcture, rank by rank
  */
 INDEX_TEMPLATE_ARGUMENTS
-std::string BPLUSTREE_TYPE::ToString(bool verbose) { return "Empty tree"; }
+std::string BPLUSTREE_TYPE::ToString(bool verbose) 
+{
+	if (root_page_id_ == INVALID_PAGE_ID)
+		return "";
+	std::queue<std::pair<page_id_t, int>> queue;
+	int current_level = 0;
+	queue.push(std::make_pair(root_page_id_, current_level));
+	std::string result;
+
+	while (queue.empty() == false)
+	{
+		auto tup = queue.front();
+		const page_id_t page_id = tup.first;
+		const int lvl = tup.second;
+		queue.pop();
+
+		//
+		if (lvl != current_level)
+		{
+			current_level = lvl;
+			result += "\n";
+		}
+		auto page_ptr = buffer_pool_manager_->FetchPage(page_id);
+		auto pg = reinterpret_cast<BPlusTreePage*>(page_ptr->GetData());
+
+		if (pg->IsLeafPage() == false)
+		{
+			auto internal = reinterpret_cast<BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator>*>(pg);
+			for (auto idx = 0; idx < internal->GetSize(); idx++)
+			{
+				queue.push(std::make_pair(internal->ValueAt(idx), current_level + 1));
+			}
+
+			result += internal->ToString(verbose);
+		}
+		else
+		{
+			auto leaf = reinterpret_cast<B_PLUS_TREE_LEAF_PAGE_TYPE*>(pg);
+			result += leaf->ToString(verbose);
+		}
+		buffer_pool_manager_->UnpinPage(page_id, false);
+	}
+
+	return result;
+}
 
 /*
  * This method is used for test only

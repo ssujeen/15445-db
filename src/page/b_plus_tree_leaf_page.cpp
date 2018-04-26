@@ -421,7 +421,7 @@ void B_PLUS_TREE_LEAF_PAGE_TYPE::CopyFirstFrom(
     BufferPoolManager *buffer_pool_manager)
 {
 	const int sz = GetSize();
-	assert ((sz > 1) && (sz < GetMaxSize()));
+	assert (sz < GetMaxSize());
 
 	memmove(&array[1], &array[0], sz * sizeof(MappingType));
 	array[0] = item;

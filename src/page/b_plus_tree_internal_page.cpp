@@ -252,7 +252,7 @@ void B_PLUS_TREE_INTERNAL_PAGE_TYPE::Remove(int index)
 	assert (sz >= 0);
 
 	if (sz)
-		memmove(&array[index+1], &array[index], sz);
+		memmove(&array[index], &array[index+1], sz);
 	IncreaseSize(-1);
 }
 
@@ -301,6 +301,18 @@ void B_PLUS_TREE_INTERNAL_PAGE_TYPE::CopyAllFrom(
 	for (int idx = 0; idx < size; idx++)
 	{
 		arr[idx] = items[idx];
+	}
+
+	// we are moving pointers in internal node, we need to update the
+	// parent id in all these pointers
+	for (int idx = 0; idx < size; idx++)
+	{
+		const page_id_t page_id = items[idx].second;
+		assert (page_id != INVALID_PAGE_ID);
+		auto page_ptr = buffer_pool_manager->FetchPage(page_id);
+		auto pg = reinterpret_cast<BPlusTreePage*>(page_ptr->GetData());
+		pg->SetParentPageId(GetPageId());
+		buffer_pool_manager->UnpinPage(page_id, true);
 	}
 
 	IncreaseSize(size);
@@ -369,7 +381,7 @@ void B_PLUS_TREE_INTERNAL_PAGE_TYPE::CopyFirstFrom(
     BufferPoolManager *buffer_pool_manager)
 {
 	const int sz = GetSize();
-	assert ((sz > 1) && (sz < GetMaxSize()));
+	assert (sz < GetMaxSize());
 
 	memmove(&array[1], &array[0], sz * sizeof(MappingType));
 	array[0] = pair;

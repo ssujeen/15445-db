@@ -241,6 +241,10 @@ bool BufferPoolManager::DeletePage(page_id_t page_id) {
 		{
 			page_table_->Remove(page_id);
 			replacer_->Erase(page);
+			// remove from the dirty list as well
+			auto it = dirty_pages_.find(page->GetPageId());
+			assert(it != end(dirty_pages_));
+			dirty_pages_.erase(it);
 			disk_manager_.DeallocatePage(page_id);
 			page->Reset();
 			free_list_->push_front(page);

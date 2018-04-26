@@ -96,7 +96,7 @@ TEST(BptTreeTest, UnitTest) {
       break;
     case 'v':
       verbose = !verbose;
-      tree.ToString(verbose);
+	  std::cout << tree.ToString(verbose) << std::endl;
       break;
     // case 'x':
     //   tree.destroyTree();
