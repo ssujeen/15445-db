@@ -351,6 +351,18 @@ void B_PLUS_TREE_INTERNAL_PAGE_TYPE::CopyLastFrom(
 	assert (sz < GetMaxSize());
 
 	array[sz] = pair;
+
+	// we need to update the parent in the page id, now that we
+	// have redistributed it
+	const page_id_t page_id = pair.second;
+	auto page_ptr = buffer_pool_manager->FetchPage(page_id);
+	assert (page_ptr != nullptr);
+
+	auto page = reinterpret_cast<BPlusTreePage*>(page_ptr->GetData());
+	page->SetParentPageId(GetPageId());
+
+	// unpin
+	buffer_pool_manager->UnpinPage(page_id, true);
 	IncreaseSize(1);
 }
 
@@ -386,6 +398,16 @@ void B_PLUS_TREE_INTERNAL_PAGE_TYPE::CopyFirstFrom(
 	memmove(&array[1], &array[0], sz * sizeof(MappingType));
 	array[0] = pair;
 	IncreaseSize(1);
+
+	const page_id_t page_id = pair.second;
+	auto page_ptr = buffer_pool_manager->FetchPage(page_id);
+	assert (page_ptr != nullptr);
+
+	auto page = reinterpret_cast<BPlusTreePage*>(page_ptr->GetData());
+	page->SetParentPageId(GetPageId());
+
+	// unpin
+	buffer_pool_manager->UnpinPage(page_id, true);
 }
 
 /*****************************************************************************

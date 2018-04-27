@@ -746,6 +746,193 @@ TEST(BPlusTreeTests, DeleteTest5) {
   delete transaction;
   remove("test.db");
 }
+
+// redistribute test for internal nodes -- start
+// redistribute from the left sibling
+TEST(BPlusTreeTests, DeleteTest6) {
+  // create KeyComparator and index schema
+  Schema *key_schema = ParseCreateStatement("a bigint");
+  GenericComparator<8> comparator(key_schema);
+  BufferPoolManager *bpm = new BufferPoolManager(50, "test.db");
+  // create b+ tree
+  BPlusTree<GenericKey<8>, RID, GenericComparator<8>> tree("foo_pk", bpm,
+                                                           comparator);
+  GenericKey<8> index_key;
+  RID rid;
+  // create transaction
+  Transaction *transaction = new Transaction(0);
+
+  // create and fetch header_page
+  page_id_t page_id;
+  auto header_page = bpm->NewPage(page_id);
+  (void)header_page;
+
+  std::vector<int64_t> keys = {1};
+  for (int i = 5; i <= 75; i += 5)
+    keys.push_back(i);
+  keys.push_back(2);
+  keys.push_back(3);
+  keys.push_back(16);
+  keys.push_back(17);
+  for (auto key : keys) {
+    int64_t value = key & 0xFFFFFFFF;
+    rid.Set((int32_t)(key >> 32), value);
+    index_key.SetFromInteger(key);
+    tree.Insert(index_key, rid, transaction);
+  }
+
+  std::vector<RID> rids;
+  for (auto key : keys) {
+    rids.clear();
+    index_key.SetFromInteger(key);
+    tree.GetValue(index_key, rids);
+    EXPECT_EQ(rids.size(), 1);
+
+    int64_t value = key & 0xFFFFFFFF;
+    EXPECT_EQ(rids[0].GetSlotNum(), value);
+  }
+
+  int64_t start_key = 1;
+  std::vector<int64_t> current_keyss(keys);
+  std::sort(begin(current_keyss), end(current_keyss));
+  index_key.SetFromInteger(start_key);
+  int idx = 0;
+  for (auto iterator = tree.Begin(index_key); iterator.isEnd() == false;
+       ++iterator) {
+    auto location = (*iterator).second;
+    EXPECT_EQ(location.GetPageId(), 0);
+    EXPECT_EQ(location.GetSlotNum(), current_keyss[idx]);
+    idx++;
+  }
+
+  EXPECT_EQ(idx, keys.size());
+  // std::cout << tree.ToString(true) << std::endl;
+
+  std::vector<int64_t> remove_keys = {35};
+  for (auto key : remove_keys) {
+    index_key.SetFromInteger(key);
+    tree.Remove(index_key, transaction);
+  }
+  std::cout << tree.ToString(true) << std::endl;
+
+  start_key = 1;
+  int64_t size = 0;
+  std::vector<int64_t> current_keys (keys);
+  std::sort(begin(current_keys), end(current_keys));
+  current_keys.erase(std::remove(current_keys.begin(), current_keys.end(), 35),
+       current_keys.end());
+  index_key.SetFromInteger(start_key);
+  for (auto iterator = tree.Begin(index_key); iterator.isEnd() == false;
+       ++iterator) {
+    auto location = (*iterator).second;
+    EXPECT_EQ(location.GetPageId(), 0);
+    EXPECT_EQ(location.GetSlotNum(), current_keys[size]);
+    size = size + 1;
+  }
+
+  EXPECT_EQ(size, 19);
+
+  bpm->UnpinPage(HEADER_PAGE_ID, true);
+  delete bpm;
+  delete transaction;
+  remove("test.db");
+}
+
+// redistribute from the left sibling
+TEST(BPlusTreeTests, DeleteTest7) {
+  // create KeyComparator and index schema
+  Schema *key_schema = ParseCreateStatement("a bigint");
+  GenericComparator<8> comparator(key_schema);
+  BufferPoolManager *bpm = new BufferPoolManager(50, "test.db");
+  // create b+ tree
+  BPlusTree<GenericKey<8>, RID, GenericComparator<8>> tree("foo_pk", bpm,
+                                                           comparator);
+  GenericKey<8> index_key;
+  RID rid;
+  // create transaction
+  Transaction *transaction = new Transaction(0);
+
+  // create and fetch header_page
+  page_id_t page_id;
+  auto header_page = bpm->NewPage(page_id);
+  (void)header_page;
+
+  std::vector<int64_t> keys = {1};
+  for (int i = 5; i <= 70; i += 5)
+    keys.push_back(i);
+  keys.push_back(31);
+  keys.push_back(32);
+  keys.push_back(36);
+  keys.push_back(37);
+  for (auto key : keys) {
+    int64_t value = key & 0xFFFFFFFF;
+    rid.Set((int32_t)(key >> 32), value);
+    index_key.SetFromInteger(key);
+    tree.Insert(index_key, rid, transaction);
+  }
+
+  std::vector<RID> rids;
+  for (auto key : keys) {
+    rids.clear();
+    index_key.SetFromInteger(key);
+    tree.GetValue(index_key, rids);
+    EXPECT_EQ(rids.size(), 1);
+
+    int64_t value = key & 0xFFFFFFFF;
+    EXPECT_EQ(rids[0].GetSlotNum(), value);
+  }
+
+  int64_t start_key = 1;
+  std::vector<int64_t> current_keyss(keys);
+  std::sort(begin(current_keyss), end(current_keyss));
+  index_key.SetFromInteger(start_key);
+  int idx = 0;
+  for (auto iterator = tree.Begin(index_key); iterator.isEnd() == false;
+       ++iterator) {
+    auto location = (*iterator).second;
+    EXPECT_EQ(location.GetPageId(), 0);
+    EXPECT_EQ(location.GetSlotNum(), current_keyss[idx]);
+    idx++;
+  }
+
+  EXPECT_EQ(idx, keys.size());
+  std::cout << tree.ToString(true) << std::endl;
+
+  std::vector<int64_t> remove_keys = {70, 65, 60, 55};
+  for (auto key : remove_keys) {
+    index_key.SetFromInteger(key);
+    tree.Remove(index_key, transaction);
+  }
+  std::cout << tree.ToString(true) << std::endl;
+
+  start_key = 1;
+  int64_t size = 0;
+  std::vector<int64_t> current_keys (keys);
+  std::sort(begin(current_keys), end(current_keys));
+  current_keys.erase(std::remove(current_keys.begin(), current_keys.end(), 70),
+       current_keys.end());
+  current_keys.erase(std::remove(current_keys.begin(), current_keys.end(), 65),
+       current_keys.end());
+  current_keys.erase(std::remove(current_keys.begin(), current_keys.end(), 60),
+       current_keys.end());
+  current_keys.erase(std::remove(current_keys.begin(), current_keys.end(), 55),
+       current_keys.end());
+  index_key.SetFromInteger(start_key);
+  for (auto iterator = tree.Begin(index_key); iterator.isEnd() == false;
+       ++iterator) {
+    auto location = (*iterator).second;
+    EXPECT_EQ(location.GetPageId(), 0);
+    EXPECT_EQ(location.GetSlotNum(), current_keys[size]);
+    size = size + 1;
+  }
+
+  EXPECT_EQ(size, 15);
+
+  bpm->UnpinPage(HEADER_PAGE_ID, true);
+  delete bpm;
+  delete transaction;
+  remove("test.db");
+}
 TEST(BPlusTreeTests, ScaleTest) {
   // create KeyComparator and index schema
   Schema *key_schema = ParseCreateStatement("a bigint");
