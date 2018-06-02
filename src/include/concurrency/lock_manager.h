@@ -9,13 +9,40 @@
 #include <condition_variable>
 #include <list>
 #include <memory>
+#include <vector>
 #include <mutex>
 #include <unordered_map>
-
+#include <cassert>
 #include "common/rid.h"
 #include "concurrency/transaction.h"
 
 namespace cmudb {
+
+enum class LockType
+{
+	LOCK_SHARED = 0, LOCK_EXCLUSIVE
+};
+
+typedef struct TxnLockStatus
+{
+	LockType type_;
+	Transaction* txn_;
+
+	TxnLockStatus(LockType type, Transaction* txn)
+		: type_(type), txn_(txn)
+	{
+	}
+
+	LockType GetType()
+	{
+		return type_;
+	}
+
+	Transaction* GetTxn()
+	{
+		return txn_;
+	}
+} TxnLockStatus;
 
 class LockManager {
 
@@ -39,6 +66,16 @@ public:
 
 private:
   bool strict_2PL_;
+
+  // vector of locks held per RID (for exclusive lock there will be only
+  // one entry per RID, for shared locks there could be more
+  // and hence we need a vector)
+  std::unordered_map <RID, std::vector<TxnLockStatus>> lm;
+  // one condition variable per RID
+  std::unordered_map <RID, std::condition_variable> lc;
+  std::mutex mtx;
+
+  void check(Transaction*, RID const&);
 };
 
 } // namespace cmudb
