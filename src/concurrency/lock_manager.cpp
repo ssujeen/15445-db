@@ -64,7 +64,11 @@ bool LockManager::LockShared(Transaction *txn, const RID &rid)
 				// on this RID
 				auto iter = lm.find(rid);
 				if (iter == lm.end())
+				{
+					// this path will only be taken if the txn has
+					// already waited, so don't update the timestamp
 					return true;
+				}
 				auto &vec = iter->second;
 				const bool cond_wait = ((vec.size() == 1)
 					&& (vec[0].GetType() == LockType::LOCK_EXCLUSIVE));
@@ -78,9 +82,14 @@ bool LockManager::LockShared(Transaction *txn, const RID &rid)
 				auto txn_id1 = vec[0].GetTxn()->GetTransactionId();
 				assert (lt.find(txn_id1) != lt.end());
 				abort = txn_timestamp > lt[txn_id1];
-				// if we are going to wait, then record the timestamp
-				if (!abort)
-					lt[txn_id] = txn_timestamp;
+				// there is no need to record the timestamp when we wait
+				// the reason is due to the deadlock prevention policy
+				// ie wait-die. we only wait if our timestamp is older than
+				// the timestamp of the txn holding the lock and since timestamps
+				// are recorded at the time of the first lock acquisition, the waiting
+				// transaction already must hold some other lock on a different RID
+				// for even having a scenario where its timestamp is older than the one
+				// which is holding the lock.
 
 				return abort;
 			});
@@ -90,7 +99,14 @@ bool LockManager::LockShared(Transaction *txn, const RID &rid)
 			return false;
 
 		// the timestamp of the txn is the timestamp of the first lock acquired
-		// or the first wait
+		// we need to update the timestamp here because it is possible for thie
+		// code to get hit without a wait.
+		// for eg) consider the following scenario
+		// txnA acquires a shared lock on RID(A), txnB tries to acquire
+		// a lock on RID(A), lm[rid] will be a vector of size 1 for txnB.
+		// in the else case, cond_wait will be false, so it will return without
+		// waiting. the core idea is simple, if there is a case where the txn
+		// may not wait, we need to update the timestamp else don't have to do it
 		if (lt.find(txn->GetTransactionId()) == lt.end())
 			lt[txn->GetTransactionId()] = get_timestamp();
 		lm[rid].push_back(TxnLockStatus(LockType::LOCK_SHARED, txn));
@@ -133,11 +149,20 @@ bool LockManager::LockExclusive(Transaction *txn, const RID &rid)
 
 				auto iter = lm.find(rid);
 				if (iter == lm.end())
+				{
+					// there is no need to update the timestamp here.
+					// the reason is subtle. if there was no contention, we would
+					// have acquired the lock in the 'if' case above
+					// now that we are here, we can wait if we had already acquired
+					// another lock (because of the deadlock prevention policy)
+					// so there is no need to update the timestamp here
 					return true;
+				}
+
+				// at this point the vector has to be non-empty
+				// because when the vector becomes empty, we remove it from the map
 				auto &vec = iter->second;
-				const bool cond_wait = !vec.empty();
-				if (!cond_wait)
-					return true;
+				assert (vec.size() != 0);
 				// handle deadlock, if there exists any transaction
 				// that has acquired a lock on this RID with a timestamp
 				// older than this txn's timestamp, then we abort
@@ -153,12 +178,8 @@ bool LockManager::LockExclusive(Transaction *txn, const RID &rid)
 						return (timestamp > lt[txn_id1]);
 					});
 				abort = (it != vec.end());
-				if (!abort)
-				{
-					// set the timestamp for the transaction if none exists
-					if (lt.find(txn_id) == lt.end())
-						lt[txn_id] = timestamp;
-				}
+				// if we are waiting, we don't need to update timestamp
+				// see comments in LockShared
 
 				return abort;
 			});
@@ -166,10 +187,9 @@ bool LockManager::LockExclusive(Transaction *txn, const RID &rid)
 		if (abort)
 			return false;
 
-		// the timestamp of the txn is the timestamp of the first lock acquired
-		// or the first wait
-		if (lt.find(txn->GetTransactionId()) == lt.end())
-			lt[txn->GetTransactionId()] = get_timestamp();
+		// no need to update timestamp here since we would only get
+		// here by waiting, if the else case is taken at the top, we must have
+		// waited atleast once
 		lm[rid].push_back(TxnLockStatus(LockType::LOCK_EXCLUSIVE, txn));
 		txn->GetExclusiveLockSet()->insert(rid);
 		check(txn, rid);
@@ -231,13 +251,6 @@ bool LockManager::LockUpgrade(Transaction *txn, const RID &rid)
 					return (timestamp > lt[txn_id1]);
 				});
 			abort = (it != vec.end());
-			if (!abort)
-			{
-				// set the timestamp for the transaction if none exists
-				if (lt.find(txn_id) == lt.end())
-					lt[txn_id] = timestamp;
-			}
-
 			return abort;
 		});
 
@@ -308,10 +321,17 @@ bool LockManager::Unlock(Transaction *txn, const RID &rid)
 	if (vec.empty())
 		lm.erase(rid);
 
-
-
 	// notify all the waiting threads if any
 	lc[rid].notify_all();
+
+	// do the check for the strict 2PL at the end to prevent deadlocks
+	if (strict_2PL_)
+	{
+		// in strict 2PL, unlock only after the transaction commits
+		if ((txn->GetState() != TransactionState::COMMITTED)
+			&& (txn->GetState() != TransactionState::ABORTED))
+			return false;
+	}
 
 	return true;
 }

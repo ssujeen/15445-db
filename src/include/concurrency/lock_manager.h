@@ -68,6 +68,12 @@ public:
   bool Unlock(Transaction *txn, const RID &rid);
   /*** END OF APIs ***/
 
+  // API for testing
+  std::unordered_map<RID, std::vector<TxnLockStatus>> GetLm()
+  {
+	  return lm;
+  }
+
 private:
   bool strict_2PL_;
 

@@ -26,6 +26,8 @@ TEST(LockManagerTest, BasicTest) {
     EXPECT_EQ(txn.GetState(), TransactionState::GROWING);
     txn_mgr.Commit(&txn);
     EXPECT_EQ(txn.GetState(), TransactionState::COMMITTED);
+	assert (txn.GetSharedLockSet()->empty() == true);
+	assert (txn.GetExclusiveLockSet()->empty() == true);
   });
 
   std::thread t1([&] {
@@ -35,10 +37,66 @@ TEST(LockManagerTest, BasicTest) {
     EXPECT_EQ(txn.GetState(), TransactionState::GROWING);
     txn_mgr.Commit(&txn);
     EXPECT_EQ(txn.GetState(), TransactionState::COMMITTED);
+	assert (txn.GetSharedLockSet()->empty() == true);
+	assert (txn.GetExclusiveLockSet()->empty() == true);
   });
 
   t0.join();
   t1.join();
+
+  assert (lock_mgr.GetLm()[rid].empty() == true);
+}
+
+TEST(LockManagerTest, BasicTestWithStrict2PL) {
+  LockManager lock_mgr{true};
+  TransactionManager txn_mgr{&lock_mgr};
+  RID rid{0, 0};
+
+  std::thread t0([&] {
+    Transaction txn(0);
+    bool res = lock_mgr.LockShared(&txn, rid);
+    EXPECT_EQ(res, true);
+    EXPECT_EQ(txn.GetState(), TransactionState::GROWING);
+    txn_mgr.Commit(&txn);
+    EXPECT_EQ(txn.GetState(), TransactionState::COMMITTED);
+	assert (txn.GetSharedLockSet()->empty() == true);
+	assert (txn.GetExclusiveLockSet()->empty() == true);
+  });
+
+  std::thread t1([&] {
+    Transaction txn(1);
+    bool res = lock_mgr.LockShared(&txn, rid);
+    EXPECT_EQ(res, true);
+    EXPECT_EQ(txn.GetState(), TransactionState::GROWING);
+    txn_mgr.Commit(&txn);
+    EXPECT_EQ(txn.GetState(), TransactionState::COMMITTED);
+	assert (txn.GetSharedLockSet()->empty() == true);
+	assert (txn.GetExclusiveLockSet()->empty() == true);
+  });
+
+  t0.join();
+  t1.join();
+  assert (lock_mgr.GetLm()[rid].empty() == true);
+}
+
+TEST(LockManagerTest, BasicTestWithStrict2PLFail) {
+  LockManager lock_mgr{true};
+  TransactionManager txn_mgr{&lock_mgr};
+  RID rid{0, 0};
+
+  std::thread t0([&] {
+    Transaction txn(0);
+    bool res = lock_mgr.LockShared(&txn, rid);
+    EXPECT_EQ(res, true);
+    EXPECT_EQ(txn.GetState(), TransactionState::GROWING);
+	res = lock_mgr.Unlock(&txn, rid);
+	EXPECT_EQ(res, false);
+	assert (txn.GetSharedLockSet()->empty() == true);
+	assert (txn.GetExclusiveLockSet()->empty() == true);
+  });
+
+  t0.join();
+  assert (lock_mgr.GetLm()[rid].empty() == true);
 }
 
 TEST(LockManagerTest, SharedExclusiveTestWithDeadlock)
@@ -61,6 +119,8 @@ TEST(LockManagerTest, SharedExclusiveTestWithDeadlock)
 			EXPECT_EQ(txn.GetState(), TransactionState::GROWING);
 			txn_mgr.Commit(&txn);
 			EXPECT_EQ(txn.GetState(), TransactionState::COMMITTED);
+			assert (txn.GetSharedLockSet()->empty() == true);
+			assert (txn.GetExclusiveLockSet()->empty() == true);
 		});
 	std::thread t1([&]
 		{
@@ -70,9 +130,12 @@ TEST(LockManagerTest, SharedExclusiveTestWithDeadlock)
 			// this will fail because the timestamp of txn1 > tstamp of t0
 			bool res = lock_mgr.LockShared(&txn, rid);
 			EXPECT_EQ(res, false);
+			assert (txn.GetSharedLockSet()->empty() == true);
+			assert (txn.GetExclusiveLockSet()->empty() == true);
 		});
     t0.join();
     t1.join();
+  assert (lock_mgr.GetLm()[rid].empty() == true);
 }
 
 TEST(LockManagerTest, SharedExclusiveTestWithoutDeadlock)
@@ -99,6 +162,8 @@ TEST(LockManagerTest, SharedExclusiveTestWithoutDeadlock)
 			EXPECT_EQ(txn.GetState(), TransactionState::GROWING);
 			txn_mgr.Commit(&txn);
 			EXPECT_EQ(txn.GetState(), TransactionState::COMMITTED);
+			assert (txn.GetSharedLockSet()->empty() == true);
+			assert (txn.GetExclusiveLockSet()->empty() == true);
 		});
 	std::thread t1([&]
 		{
@@ -114,9 +179,144 @@ TEST(LockManagerTest, SharedExclusiveTestWithoutDeadlock)
 			std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 			txn_mgr.Commit(&txn);
 			EXPECT_EQ(txn.GetState(), TransactionState::COMMITTED);
+			assert (txn.GetSharedLockSet()->empty() == true);
+			assert (txn.GetExclusiveLockSet()->empty() == true);
 		});
     t0.join();
     t1.join();
+  assert (lock_mgr.GetLm()[rid].empty() == true);
+  assert (lock_mgr.GetLm()[rid1].empty() == true);
+}
+
+TEST(LockManagerTest, WaitingOnSharedLockTest)
+{
+	LockManager lock_mgr{false};
+	TransactionManager txn_mgr{&lock_mgr};
+
+	RID rid{0, 0};
+	RID rid1{0, 1};
+	bool flag = false;
+	bool flag1 = false;
+
+	std::thread t0([&]
+		{
+			Transaction txn(0);
+			bool res = lock_mgr.LockShared(&txn, rid);
+			EXPECT_EQ(res, true);
+			EXPECT_EQ(txn.GetState(), TransactionState::GROWING);
+			flag1 = true;
+			while (flag == false)
+				; // wait for t1 to acquire the lock on rid1
+			bool res1 = lock_mgr.LockShared(&txn, rid1);
+			EXPECT_EQ(res1, true);
+			EXPECT_EQ(txn.GetState(), TransactionState::GROWING);
+			txn_mgr.Commit(&txn);
+			EXPECT_EQ(txn.GetState(), TransactionState::COMMITTED);
+			assert (txn.GetSharedLockSet()->empty() == true);
+			assert (txn.GetExclusiveLockSet()->empty() == true);
+		});
+	std::thread t1([&]
+		{
+			Transaction txn(1);
+
+			while (flag1 == false)
+				; // wait for t0 to acquire the exclusive lock
+			bool res = lock_mgr.LockExclusive(&txn, rid1);
+			flag = true;
+			EXPECT_EQ(res, true);
+			// let the other thread run
+			// sleep for 1 second
+			std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+			txn_mgr.Commit(&txn);
+			EXPECT_EQ(txn.GetState(), TransactionState::COMMITTED);
+			assert (txn.GetSharedLockSet()->empty() == true);
+			assert (txn.GetExclusiveLockSet()->empty() == true);
+		});
+    t0.join();
+    t1.join();
+  assert (lock_mgr.GetLm()[rid].empty() == true);
+  assert (lock_mgr.GetLm()[rid1].empty() == true);
+}
+
+TEST(LockManagerTest, AbortOnExclusiveLockTest)
+{
+	LockManager lock_mgr{false};
+	TransactionManager txn_mgr{&lock_mgr};
+
+	RID rid{0, 0};
+	bool flag1 = false;
+
+	std::thread t0([&]
+		{
+			Transaction txn(0);
+			bool res = lock_mgr.LockShared(&txn, rid);
+			EXPECT_EQ(res, true);
+			EXPECT_EQ(txn.GetState(), TransactionState::GROWING);
+			flag1 = true;
+			// let the other thread run
+			std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+			EXPECT_EQ(txn.GetState(), TransactionState::GROWING);
+			txn_mgr.Commit(&txn);
+			EXPECT_EQ(txn.GetState(), TransactionState::COMMITTED);
+			assert (txn.GetSharedLockSet()->empty() == true);
+			assert (txn.GetExclusiveLockSet()->empty() == true);
+		});
+	std::thread t1([&]
+		{
+			Transaction txn(1);
+
+			while (flag1 == false)
+				; // wait for t0 to acquire the exclusive lock
+			bool res = lock_mgr.LockExclusive(&txn, rid);
+			EXPECT_EQ(res, false);
+			assert (txn.GetSharedLockSet()->empty() == true);
+			assert (txn.GetExclusiveLockSet()->empty() == true);
+		});
+    t0.join();
+    t1.join();
+  assert (lock_mgr.GetLm()[rid].empty() == true);
+}
+
+TEST(LockManagerTest, AbortOnLockUpgrade)
+{
+	LockManager lock_mgr{false};
+	TransactionManager txn_mgr{&lock_mgr};
+
+	RID rid{0, 0};
+	bool flag1 = false;
+
+	std::thread t0([&]
+		{
+			Transaction txn(0);
+			while (flag1 == false)
+				; // wait for the other thread to acquire the shared lock
+			bool res = lock_mgr.LockShared(&txn, rid);
+			EXPECT_EQ(res, true);
+			EXPECT_EQ(txn.GetState(), TransactionState::GROWING);
+			bool res1 = lock_mgr.LockUpgrade(&txn, rid);
+			EXPECT_EQ(res1, false);
+			txn_mgr.Abort(&txn);
+			assert (txn.GetSharedLockSet()->empty() == true);
+			assert (txn.GetExclusiveLockSet()->empty() == true);
+		});
+	std::thread t1([&]
+		{
+			Transaction txn(1);
+
+			bool res = lock_mgr.LockShared(&txn, rid);
+			flag1 = true;
+			EXPECT_EQ(res, true);
+			// let the other thread run
+			// sleep for 1 second
+			std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+			txn_mgr.Commit(&txn);
+			EXPECT_EQ(txn.GetState(), TransactionState::COMMITTED);
+			assert (txn.GetSharedLockSet()->empty() == true);
+			assert (txn.GetExclusiveLockSet()->empty() == true);
+		});
+    t0.join();
+    t1.join();
+  assert (lock_mgr.GetLm()[rid].empty() == true);
 }
 
 TEST(LockManagerTest, LockUpgradeTest)
@@ -144,6 +344,8 @@ TEST(LockManagerTest, LockUpgradeTest)
 			EXPECT_EQ(txn.GetState(), TransactionState::GROWING);
 			txn_mgr.Commit(&txn);
 			EXPECT_EQ(txn.GetState(), TransactionState::COMMITTED);
+			assert (txn.GetSharedLockSet()->empty() == true);
+			assert (txn.GetExclusiveLockSet()->empty() == true);
 		});
 	std::thread t1([&]
 		{
@@ -160,6 +362,8 @@ TEST(LockManagerTest, LockUpgradeTest)
 			std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 			txn_mgr.Commit(&txn);
 			EXPECT_EQ(txn.GetState(), TransactionState::COMMITTED);
+			assert (txn.GetSharedLockSet()->empty() == true);
+			assert (txn.GetExclusiveLockSet()->empty() == true);
 		});
 	std::thread t2([&]
 		{
@@ -176,9 +380,12 @@ TEST(LockManagerTest, LockUpgradeTest)
 			std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 			txn_mgr.Commit(&txn);
 			EXPECT_EQ(txn.GetState(), TransactionState::COMMITTED);
+			assert (txn.GetSharedLockSet()->empty() == true);
+			assert (txn.GetExclusiveLockSet()->empty() == true);
 		});
     t0.join();
     t1.join();
 	t2.join();
+  assert (lock_mgr.GetLm()[rid].empty() == true);
 }
 } // namespace cmudb
