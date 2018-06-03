@@ -11,7 +11,9 @@
 #include <memory>
 #include <vector>
 #include <mutex>
+#include <chrono>
 #include <unordered_map>
+#include <algorithm>
 #include <cassert>
 #include "common/rid.h"
 #include "concurrency/transaction.h"
@@ -42,6 +44,7 @@ typedef struct TxnLockStatus
 	{
 		return txn_;
 	}
+
 } TxnLockStatus;
 
 class LockManager {
@@ -74,6 +77,14 @@ private:
   // one condition variable per RID
   std::unordered_map <RID, std::condition_variable> lc;
   std::mutex mtx;
+  //  records the timestamp of the first lock operation of the
+  // txn. remove from the map after the last unlock of txn
+  // if we think carefully about this, we could remove from the map
+  // after the first unlock itself, because 2PL ensures that the txn
+  // cant acquire a lock in the shrinking phase and therefore, we wouldnt
+  // have a dependency graph with a cycle ie this txn is not going to be waiting
+  // on any other transaction and hence no cycles
+  std::unordered_map <txn_id_t, std::chrono::system_clock::time_point> lt;
 
   void check(Transaction*, RID const&);
 };
