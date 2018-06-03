@@ -21,6 +21,18 @@ void LockManager::check(Transaction* txn, RID const& rid)
 		assert(false);
 }
 
+using namespace std::chrono;
+uint64_t LockManager::get_timestamp()
+{
+	const auto now = system_clock::now();
+	const auto now_ns = time_point_cast<nanoseconds>(now);
+	const auto time_since = now_ns.time_since_epoch();
+	const auto val = duration_cast<nanoseconds>(time_since);
+	const uint64_t value = val.count();
+
+	return value;
+}
+
 bool LockManager::LockShared(Transaction *txn, const RID &rid)
 {
 	// locks can happen only in the GROWING phase
@@ -36,7 +48,7 @@ bool LockManager::LockShared(Transaction *txn, const RID &rid)
 
 		// the timestamp of the txn is the timestamp of the first lock acquired
 		if (lt.find(txn->GetTransactionId()) == lt.end())
-			lt[txn->GetTransactionId()] = std::chrono::system_clock::now();
+			lt[txn->GetTransactionId()] = get_timestamp();
 		// add to the txn's shared lock set
 		txn->GetSharedLockSet()->insert(rid);
 		check(txn, rid);
@@ -45,34 +57,32 @@ bool LockManager::LockShared(Transaction *txn, const RID &rid)
 	}
 	else
 	{
-		auto vec = iter->second;
 		bool abort = false;
-		// TODO: handle deadlock
 		lc[rid].wait(ul, [&]
 			{
 				// only wait if someone acquired an exclusive lock
 				// on this RID
-				const bool cond_wait = ((vec.size() == 1))
-					&& (vec[0].GetType() == LockType::LOCK_EXCLUSIVE);
-				if (cond_wait)
-				{
-					// prevent deadlock before waiting
-					const auto txn_id = txn->GetTransactionId();
-					auto txn_timestamp = (lt.find(txn_id) != lt.end())
-						? lt[txn_id] : std::chrono::system_clock::now();
-					auto txn_id1 = vec[0].GetTxn()->GetTransactionId();
-					assert (lt.find(txn_id1) != lt.end());
-					abort = txn_timestamp > lt[txn_id1];
-					// if we are going to wait, then record the timestamp
-					if (!abort)
-						lt[txn_id] = txn_timestamp;
-
-					return abort;
-				}
-				else
-				{
+				auto iter = lm.find(rid);
+				if (iter == lm.end())
 					return true;
-				}
+				auto &vec = iter->second;
+				const bool cond_wait = ((vec.size() == 1)
+					&& (vec[0].GetType() == LockType::LOCK_EXCLUSIVE));
+
+				if (!cond_wait)
+					return true;
+				// prevent deadlock before waiting
+				const auto txn_id = txn->GetTransactionId();
+				auto txn_timestamp = (lt.find(txn_id) != lt.end())
+					? lt[txn_id] : get_timestamp();
+				auto txn_id1 = vec[0].GetTxn()->GetTransactionId();
+				assert (lt.find(txn_id1) != lt.end());
+				abort = txn_timestamp > lt[txn_id1];
+				// if we are going to wait, then record the timestamp
+				if (!abort)
+					lt[txn_id] = txn_timestamp;
+
+				return abort;
 			});
 
 		// no need to record timestamp if we are aborting
@@ -82,8 +92,8 @@ bool LockManager::LockShared(Transaction *txn, const RID &rid)
 		// the timestamp of the txn is the timestamp of the first lock acquired
 		// or the first wait
 		if (lt.find(txn->GetTransactionId()) == lt.end())
-			lt[txn->GetTransactionId()] = std::chrono::system_clock::now();
-		vec.push_back(TxnLockStatus(LockType::LOCK_SHARED, txn));
+			lt[txn->GetTransactionId()] = get_timestamp();
+		lm[rid].push_back(TxnLockStatus(LockType::LOCK_SHARED, txn));
 		txn->GetSharedLockSet()->insert(rid);
 		check(txn, rid);
 		ul.unlock();
@@ -104,6 +114,9 @@ bool LockManager::LockExclusive(Transaction *txn, const RID &rid)
 		// if RID is not present, then no one else is contended
 		// for the RID so, we can acquire the lock
 		lm[rid].push_back(TxnLockStatus(LockType::LOCK_EXCLUSIVE, txn));
+		// the timestamp of the txn is the timestamp of the first lock acquired
+		if (lt.find(txn->GetTransactionId()) == lt.end())
+			lt[txn->GetTransactionId()] = get_timestamp();
 		// add to the txn's exclusive lock set
 		txn->GetExclusiveLockSet()->insert(rid);
 		check(txn, rid);
@@ -112,13 +125,16 @@ bool LockManager::LockExclusive(Transaction *txn, const RID &rid)
 	}
 	else
 	{
-		auto vec = iter->second;
 		bool abort = false;
 		lc[rid].wait(ul, [&]
 			{
 				// an exclusive lock is strict, we can only
 				// acquire a lock if there is no contention
 
+				auto iter = lm.find(rid);
+				if (iter == lm.end())
+					return true;
+				auto &vec = iter->second;
 				const bool cond_wait = !vec.empty();
 				if (!cond_wait)
 					return true;
@@ -127,7 +143,7 @@ bool LockManager::LockExclusive(Transaction *txn, const RID &rid)
 				// older than this txn's timestamp, then we abort
 				auto txn_id = txn->GetTransactionId();
 				auto timestamp = (lt.find(txn_id) != lt.end())
-					? lt[txn_id] : std::chrono::system_clock::now();
+					? lt[txn_id] : get_timestamp();
 				auto it = std::find_if(vec.begin(), vec.end(), [&](TxnLockStatus &ts)
 					{
 						auto txn_id1 = ts.GetTxn()->GetTransactionId();
@@ -150,7 +166,11 @@ bool LockManager::LockExclusive(Transaction *txn, const RID &rid)
 		if (abort)
 			return false;
 
-		vec.push_back(TxnLockStatus(LockType::LOCK_EXCLUSIVE, txn));
+		// the timestamp of the txn is the timestamp of the first lock acquired
+		// or the first wait
+		if (lt.find(txn->GetTransactionId()) == lt.end())
+			lt[txn->GetTransactionId()] = get_timestamp();
+		lm[rid].push_back(TxnLockStatus(LockType::LOCK_EXCLUSIVE, txn));
 		txn->GetExclusiveLockSet()->insert(rid);
 		check(txn, rid);
 		ul.unlock();
@@ -181,13 +201,14 @@ bool LockManager::LockUpgrade(Transaction *txn, const RID &rid)
 
 	assert (valid == true);
 
-	auto vec = iter->second;
 	bool abort = false;
-	// TODO: handle deadlock
 	lc[rid].wait(ul, [&]
 		{
 			// only acquire the lock if the only lock left
 			// is a shared lock that is owned by this txn
+			auto iter = lm.find(rid);
+			assert (iter != lm.end());
+			auto &vec = iter->second;
 			const auto txId = txn->GetTransactionId();
 			const bool cond_success = ((vec.size() == 1))
 				&& (vec[0].GetType() == LockType::LOCK_SHARED)
@@ -200,7 +221,7 @@ bool LockManager::LockUpgrade(Transaction *txn, const RID &rid)
 			// timestamp should be there, because we must have
 			// already acquired a shared lock
 			assert (lt.find(txn_id) != lt.end());
-			auto timestamp = std::chrono::system_clock::now();
+			auto timestamp = lt[txn_id];
 			auto it = std::find_if(vec.begin(), vec.end(), [&](TxnLockStatus &ts)
 				{
 					auto txn_id1 = ts.GetTxn()->GetTransactionId();
@@ -226,10 +247,13 @@ bool LockManager::LockUpgrade(Transaction *txn, const RID &rid)
 	txn->GetSharedLockSet()->erase(rid);
 	// also remove from the lock manager. at this point the vector has *one* elt
 	// which is the elt we need to remove
-	vec.pop_back();
+	lm[rid].pop_back();
+	// no need to enter into the timestamp map because this txn would have
+	// already acquired a shared lock which would enter into the timestamp
+	// map if an entry doesn't exist already
 	// add to the lock manager as exclusive lock and also
 	// to the transaction's exclusive lock set
-	vec.push_back(TxnLockStatus(LockType::LOCK_EXCLUSIVE, txn));
+	lm[rid].push_back(TxnLockStatus(LockType::LOCK_EXCLUSIVE, txn));
 	txn->GetExclusiveLockSet()->insert(rid);
 	check(txn, rid);
 	ul.unlock();
@@ -255,12 +279,14 @@ bool LockManager::Unlock(Transaction *txn, const RID &rid)
 	// if this is the last lock held by the transaction, then
 	// remove the transaction timestamp
 	if (shared_empty && exclusive_empty)
+	{
 		lt.erase(txn->GetTransactionId());
+	}
 
 	// we need to remove the txn from the lock manager
 	auto iter = lm.find(rid);
 	assert (iter != lm.end());
-	auto vec = iter->second;
+	auto &vec = iter->second;
 
 	for (auto it = vec.begin(); it != vec.end();)
 	{
@@ -282,8 +308,11 @@ bool LockManager::Unlock(Transaction *txn, const RID &rid)
 	if (vec.empty())
 		lm.erase(rid);
 
+
+
 	// notify all the waiting threads if any
 	lc[rid].notify_all();
+
 	return true;
 }
 

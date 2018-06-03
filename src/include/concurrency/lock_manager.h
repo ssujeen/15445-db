@@ -15,6 +15,7 @@
 #include <unordered_map>
 #include <algorithm>
 #include <cassert>
+#include <cstdint>
 #include "common/rid.h"
 #include "concurrency/transaction.h"
 
@@ -84,9 +85,10 @@ private:
   // cant acquire a lock in the shrinking phase and therefore, we wouldnt
   // have a dependency graph with a cycle ie this txn is not going to be waiting
   // on any other transaction and hence no cycles
-  std::unordered_map <txn_id_t, std::chrono::system_clock::time_point> lt;
+  std::unordered_map <txn_id_t, uint64_t> lt;
 
   void check(Transaction*, RID const&);
+  uint64_t get_timestamp();
 };
 
 } // namespace cmudb
