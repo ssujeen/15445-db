@@ -286,6 +286,8 @@ void BPLUSTREE_TYPE::InsertIntoParent(BPlusTreePage *old_node,
 		old_node->SetParentPageId(root_id);
 
 		root_page_id_ = root_id;
+		// update the root page_id in the header page
+		UpdateRootPageId(0);
 		// unpin the new root page
 		buffer_pool_manager_->UnpinPage(root_id, true);
 		return;
@@ -696,6 +698,7 @@ bool BPLUSTREE_TYPE::AdjustRoot(BPlusTreePage *old_root_node) {
 		buffer_pool_manager_->UnpinPage(old_root_node->GetPageId(), true);
 		buffer_pool_manager_->DeletePage(old_root_node->GetPageId());
 		root_page_id_ = INVALID_PAGE_ID;
+		UpdateRootPageId(0);
 		return true;
 	}
 	// case 1
@@ -705,6 +708,7 @@ bool BPLUSTREE_TYPE::AdjustRoot(BPlusTreePage *old_root_node) {
 			KeyComparator>*>(old_root_node);
 		const page_id_t new_root_id = root->RemoveAndReturnOnlyChild();
 		root_page_id_ = new_root_id;
+		UpdateRootPageId(0);
 		buffer_pool_manager_->UnpinPage(old_root_node->GetPageId(), false);
 		buffer_pool_manager_->DeletePage(old_root_node->GetPageId());
 		return true;
