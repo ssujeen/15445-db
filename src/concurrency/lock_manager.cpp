@@ -96,7 +96,11 @@ bool LockManager::LockShared(Transaction *txn, const RID &rid)
 
 		// no need to record timestamp if we are aborting
 		if (abort)
+		{
+			// failed transaction should implicitly set the txn state to aborted
+			txn->SetState(TransactionState::ABORTED);
 			return false;
+		}
 
 		// the timestamp of the txn is the timestamp of the first lock acquired
 		// we need to update the timestamp here because it is possible for thie
@@ -185,7 +189,10 @@ bool LockManager::LockExclusive(Transaction *txn, const RID &rid)
 			});
 
 		if (abort)
+		{
+			txn->SetState(TransactionState::ABORTED);
 			return false;
+		}
 
 		// no need to update timestamp here since we would only get
 		// here by waiting, if the else case is taken at the top, we must have
@@ -255,7 +262,10 @@ bool LockManager::LockUpgrade(Transaction *txn, const RID &rid)
 		});
 
 	if (abort)
+	{
+		txn->SetState(TransactionState::ABORTED);
 		return false;
+	}
 	// we need to remove the RID from the transaction's sharedlock set
 	txn->GetSharedLockSet()->erase(rid);
 	// also remove from the lock manager. at this point the vector has *one* elt
@@ -330,7 +340,10 @@ bool LockManager::Unlock(Transaction *txn, const RID &rid)
 		// in strict 2PL, unlock only after the transaction commits
 		if ((txn->GetState() != TransactionState::COMMITTED)
 			&& (txn->GetState() != TransactionState::ABORTED))
+		{
+			txn->SetState(TransactionState::ABORTED);
 			return false;
+		}
 	}
 
 	return true;
