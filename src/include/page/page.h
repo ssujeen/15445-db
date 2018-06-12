@@ -36,24 +36,24 @@ public:
   // method use to latch/unlatch page content
   inline void WUnlatch()
   {
-	  std::cout << "WUnlatching page id :" << page_id_ << std::endl;
+	  // std::cout << "WUnlatching page id :" << page_id_ << std::endl;
 	  rwlatch_.WUnlock();
   }
   inline void WLatch()
   {
-	  std::cout << "Wlatching page id : " << page_id_ << std::endl;
+	  // std::cout << "Wlatching page id : " << page_id_ << std::endl;
 	  rwlatch_.WLock();
-	  std::cout << "Wlatching done page id : " << page_id_ << std::endl;
+	  // std::cout << "Wlatching done page id : " << page_id_ << std::endl;
   }
   inline void RUnlatch()
   {
-	  std::cout << "RUnlatching page id: " << page_id_ << std::endl;
+	  // std::cout << "RUnlatching page id: " << page_id_ << std::endl;
 	  rwlatch_.RUnlock();
 
   }
   inline void RLatch()
   {
-	  std::cout << "RLatching page id : " << page_id_ << std::endl;
+	  // std::cout << "RLatching page id : " << page_id_ << std::endl;
 	  rwlatch_.RLock();
   }
   inline void Reset()
