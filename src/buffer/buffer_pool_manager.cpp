@@ -151,10 +151,17 @@ bool BufferPoolManager::UnpinPage(page_id_t page_id, bool is_dirty) {
 	if (page->IsDirty() == true && is_dirty == false)
 		is_dirty = true;
 	page->SetDirty(is_dirty);
+	// std::cout << "Unpinpage page id : " << page_id << " and pin count = " << page->GetPinCount() << std::endl;
 	page->DecrementPinCount();
 
 	if (page->GetPinCount() == 0)
+	{
+		auto rwlock = page->GetLock();
+		auto wpresent = rwlock->IsWriterPresent();
+		auto reader_count = rwlock->GetReaderCount();
+		assert (wpresent == false && reader_count == 0);
 		replacer_->Insert(page);
+	}
 	// insert the page into the dirty pages map
 	if (is_dirty)
 		dirty_pages_[page_id] = page;
@@ -237,8 +244,15 @@ bool BufferPoolManager::DeletePage(page_id_t page_id) {
 		// if it is in the buffer pool, remove from it if the pin count is 0
 		// reset the page and add it to the free list, the pin count = 0
 		// implies that the page is also in the LRU replacer
+		if (page->GetPinCount() != 0)
+			assert (false);
+
 		if (page->GetPinCount() == 0)
 		{
+			auto rwlock = page->GetLock();
+			auto wpresent = rwlock->IsWriterPresent();
+			auto reader_count = rwlock->GetReaderCount();
+			assert (wpresent == false && reader_count == 0);
 			page_table_->Remove(page_id);
 			replacer_->Erase(page);
 			// remove from the dirty list as well, if present

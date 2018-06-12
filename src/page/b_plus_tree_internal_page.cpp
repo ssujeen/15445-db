@@ -318,6 +318,25 @@ void B_PLUS_TREE_INTERNAL_PAGE_TYPE::CopyAllFrom(
 	IncreaseSize(size);
 }
 
+// SAFE DELETE/INSERT
+INDEX_TEMPLATE_ARGUMENTS
+bool B_PLUS_TREE_INTERNAL_PAGE_TYPE::SafeInsert()
+{
+	// this will prevent split from happening
+	return ((GetSize() + 1) < GetMaxSize());
+}
+
+INDEX_TEMPLATE_ARGUMENTS
+bool B_PLUS_TREE_INTERNAL_PAGE_TYPE::SafeDelete()
+{
+	// this will prevent coalesce/redistribute from happening
+	// root page should have minimum of 2 pointers
+	if (GetParentPageId() == INVALID_PAGE_ID)
+		return ((GetSize() - 1) >= 2);
+	const int thresh = GetMaxSize() >> 1;
+	return ((GetSize() - 1) >= thresh) ;
+}
+
 /*****************************************************************************
  * REDISTRIBUTE
  *****************************************************************************/

@@ -34,16 +34,39 @@ public:
   inline void SetDirty(bool dirty) { is_dirty_ = dirty;}
   inline void SetPageId(page_id_t page_id) {page_id_ = page_id;}
   // method use to latch/unlatch page content
-  inline void WUnlatch() { rwlatch_.WUnlock(); }
-  inline void WLatch() { rwlatch_.WLock(); }
-  inline void RUnlatch() { rwlatch_.RUnlock(); }
-  inline void RLatch() { rwlatch_.RLock(); }
+  inline void WUnlatch()
+  {
+	  std::cout << "WUnlatching page id :" << page_id_ << std::endl;
+	  rwlatch_.WUnlock();
+  }
+  inline void WLatch()
+  {
+	  std::cout << "Wlatching page id : " << page_id_ << std::endl;
+	  rwlatch_.WLock();
+	  std::cout << "Wlatching done page id : " << page_id_ << std::endl;
+  }
+  inline void RUnlatch()
+  {
+	  std::cout << "RUnlatching page id: " << page_id_ << std::endl;
+	  rwlatch_.RUnlock();
+
+  }
+  inline void RLatch()
+  {
+	  std::cout << "RLatching page id : " << page_id_ << std::endl;
+	  rwlatch_.RLock();
+  }
   inline void Reset()
   {
 	  pin_count_ = 0;
 	  is_dirty_ = false;
 	  memset(data_, 0, PAGE_SIZE);
 	  page_id_ = INVALID_PAGE_ID;
+  }
+
+  RWMutex* GetLock()
+  {
+	  return &rwlatch_;
   }
 
 private:

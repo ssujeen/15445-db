@@ -12,7 +12,7 @@
 
 #include <queue>
 #include <vector>
-
+#include <mutex>
 #include "concurrency/transaction.h"
 #include "index/index_iterator.h"
 #include "page/b_plus_tree_internal_page.h"
@@ -95,6 +95,7 @@ private:
   void UpdateRootPageId(int insert_record = false);
 
   // member variable
+  std::mutex mtx_;
   std::string index_name_;
   page_id_t root_page_id_;
   BufferPoolManager *buffer_pool_manager_;

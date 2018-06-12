@@ -25,6 +25,16 @@ public:
   RWMutex(const RWMutex &) = delete;
   RWMutex &operator=(const RWMutex &) = delete;
 
+  uint32_t GetReaderCount()
+  {
+	  return reader_count_;
+  }
+
+  bool IsWriterPresent()
+  {
+	  return writer_entered_;
+  }
+ 
   void WLock() {
     std::unique_lock<mutex_t> lock(mutex_);
     while (writer_entered_)
@@ -42,6 +52,8 @@ public:
 
   void RLock() {
     std::unique_lock<mutex_t> lock(mutex_);
+	//std::cout << "writer entered = " << writer_entered_ << std::endl;
+	// std::cout << "reader_count = " << reader_count_ << std::endl;
     while (writer_entered_ || reader_count_ == max_readers_)
       reader_.wait(lock);
     reader_count_++;

@@ -11,7 +11,7 @@
 #include "common/rid.h"
 #include "index/b_plus_tree.h"
 #include "page/header_page.h"
-
+#define REFCOUNT_DEBUG 0x1
 namespace cmudb {
 
 INDEX_TEMPLATE_ARGUMENTS
@@ -49,10 +49,26 @@ bool BPLUSTREE_TYPE::GetValue(const KeyType &key,
 	// it specifically
 
 	page_id_t page_id;
+
+	// lock semantics
+	// root_page_id_ is a shared variable
+	// we need to protect access to root_page_id_ until the root page
+	// can be explicitly locked
+	// consider what would happen if we don't do it.
+	// GetValue() gets the page_id as X and gets pre-empted before it could lock
+	// the page_ptr corresponding to page_id X
+	// Delete() will trigger the root page_id X to be deleted
+	// GetValue() resumes and works with stale data
+	// so if we think about it, we can only unlock the mutex, if we can release
+	// the RWLock on the root page
+	mtx_.lock();
+	bool is_locked = true;	
 	page_id = root_page_id_;
 	LOG_DEBUG("fetching page_id : %d", page_id);
 	Page* page_ptr = buffer_pool_manager_->FetchPage(page_id);
 	assert (page_ptr != nullptr);
+	// lookup acquires a read lock
+	page_ptr->RLatch();
 	BPlusTreePage* pg = reinterpret_cast<BPlusTreePage*>
 		(page_ptr->GetData());
 
@@ -66,14 +82,25 @@ bool BPLUSTREE_TYPE::GetValue(const KeyType &key,
 			reinterpret_cast<BPlusTreeInternalPage<KeyType, page_id_t,
 			KeyComparator>*>(pg);
 		page_id_t page_id = internal->Lookup(key, comparator_);
+		// before unpinning, release the lock on the page
+		page_ptr->RUnlatch();
+		// unlock the mutex..note that we don't have a deadlock here
+		// because a txn can't acquire lock on pages without first
+		// acquiring the mutex
+		if (is_locked)
+		{
+			mtx_.unlock();
+			is_locked = false;
+		}
 		// before reassigning internal, we need to unpin the page
 		LOG_DEBUG("unpinning page id %d", pg->GetPageId());
 		buffer_pool_manager_->UnpinPage(pg->GetPageId(), is_dirty);
 		// for an internal node, value is always of type page_id_t
 
 		LOG_DEBUG("fetching page id %d", page_id);
-		Page* page_ptr = buffer_pool_manager_->FetchPage(page_id);
+		page_ptr = buffer_pool_manager_->FetchPage(page_id);
 		assert (page_ptr != nullptr);
+		page_ptr->RLatch();
 		pg = reinterpret_cast<BPlusTreePage*>(page_ptr->GetData());
 	}
 
@@ -85,6 +112,8 @@ bool BPLUSTREE_TYPE::GetValue(const KeyType &key,
 	if (leaf->Lookup(key, val, comparator_) == false)
 	{
 		// key not found
+		// unlock the page
+		page_ptr->RUnlatch();
 		// unpin the page before returning
 		buffer_pool_manager_->UnpinPage(leaf->GetPageId(), is_dirty);
 		return false;
@@ -92,6 +121,8 @@ bool BPLUSTREE_TYPE::GetValue(const KeyType &key,
 
 	// key found, append to vector
 	result.push_back(val);
+	// unpin the page before returning
+	page_ptr->RUnlatch();
 	buffer_pool_manager_->UnpinPage(leaf->GetPageId(), is_dirty);
 	return true;
 }
@@ -110,6 +141,7 @@ INDEX_TEMPLATE_ARGUMENTS
 bool BPLUSTREE_TYPE::Insert(const KeyType &key, const ValueType &value,
                             Transaction *transaction)
 {
+	mtx_.lock();
 	// empty tree
 	if (root_page_id_ == INVALID_PAGE_ID)
 	{
@@ -117,6 +149,7 @@ bool BPLUSTREE_TYPE::Insert(const KeyType &key, const ValueType &value,
 		// when creating a new tree, we need to insert into the
 		// header page
 		UpdateRootPageId(static_cast<int>(true));
+		mtx_.unlock();
 		return true;
 	}
 
@@ -169,27 +202,65 @@ INDEX_TEMPLATE_ARGUMENTS
 bool BPLUSTREE_TYPE::InsertIntoLeaf(const KeyType &key, const ValueType &value,
                                     Transaction *transaction)
 {
+	// we get here after acquiring the mutex
+	bool is_locked = true;
 
+#if REFCOUNT_DEBUG
+	std::vector<page_id_t> vec;
+#endif
 	// non-empty tree, we need to find the leaf node to insert
 	Page* page_ptr = buffer_pool_manager_->FetchPage(root_page_id_);
 	assert (page_ptr != nullptr);
+#if REFCOUNT_DEBUG
+	vec.push_back(root_page_id_);
+#endif
 	BPlusTreePage* pg = reinterpret_cast<BPlusTreePage*>(page_ptr->GetData());
 	BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator>* internal;
 	B_PLUS_TREE_LEAF_PAGE_TYPE* leaf;
-	// vector to unpin the internal pages at the end
-	std::vector<BPlusTreePage*> vec;
 	page_id_t child;
 
 	while (pg->IsLeafPage() == false)
 	{
-		vec.push_back(pg);
+		// insert requires to acquire the write lock
+		page_ptr->WLatch();
+		// also add to the txn's page set
+		transaction->AddIntoPageSet(page_ptr);
 		internal = reinterpret_cast<BPlusTreeInternalPage<KeyType,
 			page_id_t, KeyComparator>*>(pg);
 		child = internal->Lookup(key, comparator_);
+#if REFCOUNT_DEBUG
+		vec.push_back(child);
+#endif
 		page_ptr = buffer_pool_manager_->FetchPage(child);
 		assert (page_ptr != nullptr);
 		pg = reinterpret_cast<BPlusTreePage*>(page_ptr->GetData());
+		// now we need to make a decision. if this node has enough space
+		// that it won't cause a split, then we can safely free the locks
+		// we hold on this node's ancestors
+		auto check_internal = reinterpret_cast<BPlusTreeInternalPage<KeyType,
+			page_id_t, KeyComparator>*>(pg);
+		if (check_internal->SafeInsert() == true)
+		{
+			// unlock all the locks on the ancestors
+			while (!transaction->GetPageSet()->empty())
+			{
+				auto page_pt = transaction->GetPageSet()->front();
+				// unlock the page before unpinning
+				page_pt->WUnlatch();
+				buffer_pool_manager_->UnpinPage(page_pt->GetPageId(), false);
+				transaction->GetPageSet()->pop_front();
+			}
+			// unlock the mtx
+			if (is_locked == true)
+			{
+				is_locked = false;
+				mtx_.unlock();
+			}
+		}
 	}
+	// acquire the lock on the leaf page
+	page_ptr->WLatch();
+	transaction->AddIntoPageSet(page_ptr);
 
 	// got the leaf page
 	leaf = reinterpret_cast<B_PLUS_TREE_LEAF_PAGE_TYPE*>(pg);
@@ -214,13 +285,26 @@ bool BPLUSTREE_TYPE::InsertIntoLeaf(const KeyType &key, const ValueType &value,
 		buffer_pool_manager_->UnpinPage(split_leaf->GetPageId(), true);
 	}
 
-	// leaf is always dirty
-	buffer_pool_manager_->UnpinPage(leaf->GetPageId(), true);
-	for (auto elem : vec)
+	// insert is done
+	if (is_locked == true)
+		mtx_.unlock();
+	// unlock the pages before unpinning
+	while (!transaction->GetPageSet()->empty())
 	{
-		// potentially, all the pages could be written during split
-		buffer_pool_manager_->UnpinPage(elem->GetPageId(), true);
+		auto page_pt = transaction->GetPageSet()->front();
+		page_pt->WUnlatch();
+		buffer_pool_manager_->UnpinPage(page_pt->GetPageId(), true);
+		transaction->GetPageSet()->pop_front();
 	}
+#if REFCOUNT_DEBUG
+	while (!vec.empty())
+	{
+		auto page_pt = buffer_pool_manager_->FetchPage(vec.back());
+		assert (page_pt->GetPinCount() == 1);
+		buffer_pool_manager_->UnpinPage(page_pt->GetPageId(), false);
+		vec.pop_back();
+	}
+#endif
 
 	return true;
 }
@@ -343,37 +427,78 @@ void BPLUSTREE_TYPE::InsertIntoParent(BPlusTreePage *old_node,
 INDEX_TEMPLATE_ARGUMENTS
 void BPLUSTREE_TYPE::Remove(const KeyType &key, Transaction *transaction)
 {
+	bool is_locked = true;
+	mtx_.lock();
 	// handle empty tree
 	if (root_page_id_ == INVALID_PAGE_ID)
+	{
+		mtx_.unlock();
 		return;
+	}
 
+#if REFCOUNT_DEBUG
+	std::vector<page_id_t> vec;
+#endif
 	// non-empty tree, we need to find the leaf node to remove from
 	Page* page_ptr = buffer_pool_manager_->FetchPage(root_page_id_);
 	assert (page_ptr != nullptr);
+#if REFCOUNT_DEBUG
+	vec.push_back(root_page_id_);
+#endif
 	BPlusTreePage* pg = reinterpret_cast<BPlusTreePage*>(page_ptr->GetData());
 	BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator>* internal;
 	B_PLUS_TREE_LEAF_PAGE_TYPE* leaf;
-	// vector to unpin the internal pages at the end
-	std::stack<BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator>*> vec;
 	page_id_t child;
 
 	while (pg->IsLeafPage() == false)
 	{
+		// lock the page
+		page_ptr->WLatch();
+
+		// std::cout << "Looking up page_id : " << page_ptr->GetPageId() << std::endl;
+		// add to the txn's locked page set
+		transaction->AddIntoPageSet(page_ptr);
 		internal = reinterpret_cast<BPlusTreeInternalPage<KeyType,
 			page_id_t, KeyComparator>*>(pg);
-		vec.push(internal);
 		child = internal->Lookup(key, comparator_);
+#if REFCOUNT_DEBUG
+		vec.push_back(child);
+#endif
 		page_ptr = buffer_pool_manager_->FetchPage(child);
+		// TODO: delete this
+		if (page_ptr == nullptr)
+		{
+			std::cout << "page_id = " << child << std::endl;
+			buffer_pool_manager_->FetchPage(child);
+		}
 		assert (page_ptr != nullptr);
 		pg = reinterpret_cast<BPlusTreePage*>(page_ptr->GetData());
+		auto check_internal = reinterpret_cast<BPlusTreeInternalPage<KeyType,
+			page_id_t, KeyComparator>*>(pg);
+		if (check_internal->SafeDelete() == true)
+		{
+			// unlock all the locks on the ancestors
+			while (!transaction->GetPageSet()->empty())
+			{
+				auto page_pt = transaction->GetPageSet()->front();
+				// unlock the page before unpinning
+				page_pt->WUnlatch();
+				buffer_pool_manager_->UnpinPage(page_pt->GetPageId(), false);
+				transaction->GetPageSet()->pop_front();
+			}
+			// unlock the mtx
+			if (is_locked == true)
+			{
+				is_locked = false;
+				mtx_.unlock();
+			}
+		}
 	}
 
-	while (vec.empty() == false)
-	{
-		auto elem = vec.top();
-		vec.pop();
-		buffer_pool_manager_->UnpinPage(elem->GetPageId(), false);
-	}
+	// acquire the lock on the leaf page
+	page_ptr->WLatch();
+	transaction->AddIntoPageSet(page_ptr);
+
 	// got the leaf page
 	leaf = reinterpret_cast<B_PLUS_TREE_LEAF_PAGE_TYPE*>(pg);
 	const int avail_sz = leaf->RemoveAndDeleteRecord(key, comparator_);
@@ -382,20 +507,58 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key, Transaction *transaction)
 	// if the available sz is the max, it means empty tree
 	if (leaf->GetParentPageId() == INVALID_PAGE_ID)
 	{
+		// unlock the page first
+		assert (is_locked == true);
+		assert(transaction->GetPageSet()->size() == 1);
+		auto page_pt = transaction->GetPageSet()->front();
+		assert (page_pt->GetPageId() == leaf->GetPageId());
+		page_pt->WUnlatch();
+		transaction->GetPageSet()->pop_front();
+
 		if (avail_sz == max_sz)
 		{
 			assert (AdjustRoot(reinterpret_cast<BPlusTreePage*>(leaf)) == true);
+#if REFCOUNT_DEBUG
+			while (!vec.empty())
+			{
+				auto page_pt = buffer_pool_manager_->FetchPage(vec.back());
+				assert (page_pt->GetPinCount() == 1);
+				buffer_pool_manager_->UnpinPage(page_pt->GetPageId(), false);
+				vec.pop_back();
+			}
+#endif
+			mtx_.unlock();
 			return;
 		}
+		// unlock the page before unpinning
 		buffer_pool_manager_->UnpinPage(leaf->GetPageId(), true);
+		// unlock the mutex
+		mtx_.unlock();
 		return;
 	}
 
 	if (leaf->GetParentPageId() != INVALID_PAGE_ID
 		&& (avail_sz <= thresh))
 	{
+		// all the locks on the ancestors must be removed at this point
+		// already
+		assert (is_locked == false);
+		assert (transaction->GetPageSet()->size() == 1);
+		auto page_pt = transaction->GetPageSet()->front();
+		assert (page_pt->GetPageId() == leaf->GetPageId());
+		page_pt->WUnlatch();
+		transaction->GetPageSet()->pop_front();
 		// no need to coalesce/redistribute
 		buffer_pool_manager_->UnpinPage(leaf->GetPageId(), true);
+#if REFCOUNT_DEBUG
+		while (!vec.empty())
+		{
+			auto page_pt = buffer_pool_manager_->FetchPage(vec.back());
+			assert (page_pt->GetPinCount() == 1);
+			buffer_pool_manager_->UnpinPage(page_pt->GetPageId(), false);
+			vec.pop_back();
+		}
+#endif
 		return;
 	}
 
@@ -406,6 +569,15 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key, Transaction *transaction)
 	const page_id_t leaf_id = leaf->GetPageId();
 	// but before that let's get the parent
 	page_id_t curr_id = leaf->GetParentPageId();
+
+	assert (transaction->GetPageSet()->empty() != true);
+	// we need to retrieve from the reverse order, since
+	// we are moving from leaf to root
+	auto page_pt = transaction->GetPageSet()->back();
+	assert (page_pt->GetPageId() == leaf->GetPageId());
+	transaction->GetPageSet()->pop_back();
+	// unlock before unpinning the page
+	page_pt->WUnlatch();
 	if (delete_node)
 	{
 		buffer_pool_manager_->UnpinPage(leaf_id, false);
@@ -431,7 +603,23 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key, Transaction *transaction)
 
 		if (root_exit || internal_exit)
 		{
-			buffer_pool_manager_->UnpinPage(curr_id, true);
+			// decrement the pincount of the curr_id page
+			page_ptr->DecrementPinCount();
+			// unlock all the locks on the ancestors
+			while (!transaction->GetPageSet()->empty())
+			{
+				auto page_pt = transaction->GetPageSet()->front();
+				// unlock the page before unpinning
+				page_pt->WUnlatch();
+				buffer_pool_manager_->UnpinPage(page_pt->GetPageId(), false);
+				transaction->GetPageSet()->pop_front();
+			}
+			// unlock the mtx
+			if (is_locked == true)
+			{
+				is_locked = false;
+				mtx_.unlock();
+			}
 			break;
 		}
 		const bool delete_node = CoalesceOrRedistribute(curr,
@@ -439,8 +627,27 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key, Transaction *transaction)
 		// cache the next_id before delete the page to avoid
 		// potential race
 		const page_id_t next_id = curr->GetParentPageId();
+		// ref count is 2 at this point
+		buffer_pool_manager_->UnpinPage(curr_id, false);
+	
+		auto page_pt = transaction->GetPageSet()->back();
+		assert (page_pt->GetPageId() == curr_id);
+		transaction->GetPageSet()->pop_back();
 		if (delete_node)
 		{
+			// once we delete this, we don't have to worry about this
+			// in the txn's page set
+			for (auto it = transaction->GetPageSet()->begin();
+				it != transaction->GetPageSet()->end();)
+			{
+				auto page_pt = *it;
+				if (page_pt->GetPageId() == curr_id)
+				{
+					page_pt->WUnlatch();
+					it = transaction->GetPageSet()->erase(it);
+				}
+				it++;
+			}
 			buffer_pool_manager_->UnpinPage(curr_id, false);
 			buffer_pool_manager_->DeletePage(curr_id);
 		}
@@ -451,6 +658,32 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key, Transaction *transaction)
 
 		curr_id = next_id;
 	}
+
+#if REFCOUNT_DEBUG
+	while (!vec.empty())
+	{
+		auto page_pt = buffer_pool_manager_->FetchPage(vec.back());
+		if (page_pt->GetPinCount() != 1)
+			std::cout << "improper pin count page : " << page_pt->GetPageId() << '\n';
+		assert (page_pt->GetPinCount() == 1);
+		buffer_pool_manager_->UnpinPage(page_pt->GetPageId(), false);
+		vec.pop_back();
+	}
+#endif
+	// handle for the possibility that Coalesce returns true ie
+	// it deletes the parent, this can only happen when the parent
+	// is the root and it has less than 2 pointers, in that case,
+	// the page id belonging to the root will be in the txn page set
+	// which needs to be removed
+	while (!transaction->GetPageSet()->empty())
+	{
+		assert (transaction->GetPageSet()->size() == 1);
+		auto page_pt = transaction->GetPageSet()->front();
+		assert (page_pt->GetPinCount() == 0);
+		transaction->GetPageSet()->pop_front();
+	}
+	if (is_locked)
+		mtx_.unlock();
 }
 
 /*
@@ -536,6 +769,24 @@ bool BPLUSTREE_TYPE::CoalesceOrRedistribute(N *node, Transaction *transaction)
 		{
 			// parent needs to be deleted
 			assert (parent->GetParentPageId() == INVALID_PAGE_ID);
+			const page_id_t del_page_id = parent->GetPageId();
+			// once we delete this, we don't have to worry about this
+			// in the txn's page set
+			for (auto it = transaction->GetPageSet()->begin();
+				it != transaction->GetPageSet()->end();)
+			{
+				auto page_pt = *it;
+				if (page_pt->GetPageId() == del_page_id)
+				{
+					page_pt->WUnlatch();
+					it = transaction->GetPageSet()->erase(it);
+				}
+				else
+				{
+					it++;
+				}
+			}
+			buffer_pool_manager_->UnpinPage(parent->GetPageId(), false);
 			AdjustRoot(reinterpret_cast<BPlusTreePage*>(parent));
 			// update the parent in the dst and src
 			dst->SetParentPageId(INVALID_PAGE_ID);
@@ -892,7 +1143,7 @@ void BPLUSTREE_TYPE::InsertFromFile(const std::string &file_name,
   while (input) {
     input >> key;
 
-    KeyType index_key;
+	KeyType index_key;
     index_key.SetFromInteger(key);
     RID rid(key);
     Insert(index_key, rid, transaction);
