@@ -5,6 +5,7 @@
 #include <string>
 #include <stack>
 #include <queue>
+#include <thread>
 
 #include "common/exception.h"
 #include "common/logger.h"
@@ -389,12 +390,12 @@ void BPLUSTREE_TYPE::RemoveLatches(Transaction* transaction, bool &is_locked,
 		page_pt->WUnlatch();
 		buffer_pool_manager_->UnpinPage(page_pt->GetPageId(), writable);
 		transaction->GetPageSet()->pop_front();
-	}
-	// unlock the mtx
-	if (is_locked == true)
-	{
-		is_locked = false;
-		mtx_.unlock();
+		// unlock the mtx
+		if (is_locked == true)
+		{
+			is_locked = false;
+			mtx_.unlock();
+		}
 	}
 }
 
@@ -456,7 +457,9 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key, Transaction *transaction)
 	// got the leaf page
 	leaf = reinterpret_cast<B_PLUS_TREE_LEAF_PAGE_TYPE*>(pg);
 	const int avail_sz = leaf->RemoveAndDeleteRecord(key, comparator_);
-	const int thresh = (leaf->GetMaxSize() >> 1) * sizeof(MappingType);
+	int thresh = (leaf->GetMaxSize() >> 1) * sizeof(MappingType);
+	if (leaf->GetMaxSize() % 2)
+		thresh += sizeof(MappingType);
 	const int max_sz = leaf->GetMaxSize() * sizeof(MappingType);
 	// if the available sz is the max, it means empty tree
 	if (leaf->GetParentPageId() == INVALID_PAGE_ID)
@@ -517,7 +520,9 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key, Transaction *transaction)
 
 		auto curr = reinterpret_cast<BPlusTreeInternalPage<KeyType,
 			page_id_t, KeyComparator>*>(page_ptr->GetData());
-		const int thresh = curr->GetMaxSize() >> 1;
+		int thresh = curr->GetMaxSize() >> 1;
+		if (curr->GetMaxSize() % 2)
+			thresh += 1;
 		const bool root_exit = (curr->GetParentPageId() == INVALID_PAGE_ID)
 			&& (curr->GetSize() >= 2);
 		const bool internal_exit = (curr->GetParentPageId() != INVALID_PAGE_ID)
@@ -571,7 +576,7 @@ INDEX_TEMPLATE_ARGUMENTS
 template <typename N>
 void BPLUSTREE_TYPE::GetSiblingAndKeyIdx(N* const node,
 	BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator>* &parent,
-	N* &sibling, int &keyIdx)
+	N* &sibling, int &keyIdx, Transaction* transaction)
 {
 
 	const int32_t currIdx = parent->ValueIndex(node->GetPageId());
@@ -586,14 +591,22 @@ void BPLUSTREE_TYPE::GetSiblingAndKeyIdx(N* const node,
 	assert (sibling_id != INVALID_PAGE_ID);
 	auto page_ptr = buffer_pool_manager_->FetchPage(sibling_id);
 	assert (page_ptr != nullptr);
+	// lock the sibling
+	page_ptr->WLatch();
+	transaction->AddIntoPageSet(page_ptr);
 	sibling = reinterpret_cast<N*>(page_ptr->GetData());
 	keyIdx = (siblingIdx > currIdx) ? siblingIdx : currIdx;
 }
 
 INDEX_TEMPLATE_ARGUMENTS
 template<typename N>
-void BPLUSTREE_TYPE::PutSibling(N* const sibling, bool is_dirty)
+void BPLUSTREE_TYPE::PutSibling(N* const sibling, bool is_dirty,
+	Transaction* transaction)
 {
+	auto page_ptr = transaction->GetPageSet()->back();
+	assert (page_ptr->GetPageId() == sibling->GetPageId());
+	transaction->GetPageSet()->pop_back();
+	page_ptr->WUnlatch();
 	buffer_pool_manager_->UnpinPage(sibling->GetPageId(), is_dirty);
 }
 /*
@@ -609,11 +622,13 @@ bool BPLUSTREE_TYPE::CoalesceOrRedistribute(N *node, Transaction *transaction)
 {
 	N* sibling = nullptr;
 	int keyIdx;
+	// there is no need to lock the parent page, because it would be already
+	// locked by the txn
 	auto page_ptr = buffer_pool_manager_->FetchPage(node->GetParentPageId());
 	assert (page_ptr != nullptr);
 	auto parent = reinterpret_cast<BPlusTreeInternalPage<KeyType, page_id_t,
 	KeyComparator>*>(page_ptr->GetData());
-	GetSiblingAndKeyIdx(node, parent, sibling, keyIdx);
+	GetSiblingAndKeyIdx(node, parent, sibling, keyIdx, transaction);
 	assert (keyIdx < parent->GetSize());
 	assert(sibling != nullptr);
 	const int eltCount = node->GetSize();
@@ -677,13 +692,13 @@ bool BPLUSTREE_TYPE::CoalesceOrRedistribute(N *node, Transaction *transaction)
 			// copied to node
 			// avoid potential race by caching sibling id
 			const page_id_t sibling_id = sibling->GetPageId();
-			PutSibling(sibling, false);
+			PutSibling(sibling, false, transaction);
 			buffer_pool_manager_->DeletePage(sibling_id);
 		}
 		else
 		{
 			// copied to sibling
-			PutSibling(sibling, true);
+			PutSibling(sibling, true, transaction);
 		}
 	}
 	else
@@ -745,7 +760,7 @@ bool BPLUSTREE_TYPE::CoalesceOrRedistribute(N *node, Transaction *transaction)
 			parent->SetKeyAt(keyIdx, parentKey);
 		}
 		// cleanup
-		PutSibling(sibling, true);
+		PutSibling(sibling, true, transaction);
 	}
 
 	// cleanup

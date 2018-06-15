@@ -1,5 +1,4 @@
 #include "buffer/buffer_pool_manager.h"
-
 namespace cmudb {
 
 /*
@@ -53,6 +52,7 @@ Page *BufferPoolManager::FetchPage(page_id_t page_id)
 
 	Page* page;
 	latch_.lock();
+
 	// case 1: the natural thing to do is to check if we already have it, if so increase the
 	// ref count (pin count) and return the page
 	if (page_table_->Find(page_id, page))
@@ -139,6 +139,7 @@ bool BufferPoolManager::UnpinPage(page_id_t page_id, bool is_dirty) {
 		return false;
 	}
 
+
 	assert (page->GetPageId() == page_id);
 	assert (page->GetPageId() != INVALID_PAGE_ID);
 	if (page->GetPinCount() <= 0)
@@ -151,7 +152,6 @@ bool BufferPoolManager::UnpinPage(page_id_t page_id, bool is_dirty) {
 	if (page->IsDirty() == true && is_dirty == false)
 		is_dirty = true;
 	page->SetDirty(is_dirty);
-	// std::cout << "Unpinpage page id : " << page_id << " and pin count = " << page->GetPinCount() << std::endl;
 	page->DecrementPinCount();
 
 	if (page->GetPinCount() == 0)
@@ -245,7 +245,16 @@ bool BufferPoolManager::DeletePage(page_id_t page_id) {
 		// reset the page and add it to the free list, the pin count = 0
 		// implies that the page is also in the LRU replacer
 		if (page->GetPinCount() != 0)
-			assert (false);
+		{
+			// this is fine, and not an error.
+			// for eg) consider the following scenario
+			// if the thread that deletes the page gets control of this page
+			// after the other thread releases the latch on this page but before
+			// it decrements the pin count, we get to this case
+			// a *lot* of time has been spent debugging this issue as an error
+			latch_.unlock();
+			return false;
+		}
 
 		if (page->GetPinCount() == 0)
 		{

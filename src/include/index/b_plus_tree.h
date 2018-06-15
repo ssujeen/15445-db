@@ -76,9 +76,9 @@ private:
   template<typename N>
   void GetSiblingAndKeyIdx(N* const node,
   	BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator>* &parent,
-	N* &sibling, int &keyIdx);
+	N* &sibling, int &keyIdx, Transaction* transaction);
   template<typename N>
-  void PutSibling(N* const sibling, bool is_dirty);
+  void PutSibling(N* const sibling, bool is_dirty, Transaction* transaction);
   template <typename N> N *Split(N *node);
 
   template <typename N>

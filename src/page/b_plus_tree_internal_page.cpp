@@ -333,7 +333,9 @@ bool B_PLUS_TREE_INTERNAL_PAGE_TYPE::SafeDelete()
 	// root page should have minimum of 2 pointers
 	if (GetParentPageId() == INVALID_PAGE_ID)
 		return ((GetSize() - 1) >= 2);
-	const int thresh = GetMaxSize() >> 1;
+	int thresh = GetMaxSize() >> 1;
+	if (GetMaxSize() % 2)
+		thresh += 1;
 	return ((GetSize() - 1) >= thresh) ;
 }
 
