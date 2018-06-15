@@ -8,6 +8,7 @@
 #include <functional>
 #include <iostream>
 #include <thread>
+#include <random>
 
 #include "buffer/buffer_pool_manager.h"
 #include "common/logger.h"
@@ -95,9 +96,7 @@ void DeleteHelperSplit(
   for (auto key : remove_keys) {
     if ((uint64_t)key % total_threads == thread_itr) {
       index_key.SetFromInteger(key);
-	  std::cout << "Removing " << index_key << std::endl;
       tree.Remove(index_key, transaction);
-	  std::cout << "Removing " << index_key << " done" << std::endl;
     }
   }
   delete transaction;
@@ -400,12 +399,15 @@ TEST(BPlusTreeConcurrentTest, DeleteTest5) {
   page_id_t page_id;
   auto header_page = bpm->NewPage(page_id);
   (void)header_page;
+  std::random_device rd;
+  std::mt19937 g(rd());
 
   // sequential insert
   std::vector<int64_t> keys;
   int scale_factor = 15000;
   for (int i = 1; i <= scale_factor; i++)
 	  keys.push_back(i);
+  std::shuffle(begin(keys), end(keys), g);
 
   InsertHelper(tree, keys);
 
