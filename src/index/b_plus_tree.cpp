@@ -66,18 +66,16 @@ bool BPLUSTREE_TYPE::GetValue(const KeyType &key,
 	LOG_DEBUG("fetching page_id : %d", page_id);
 	Page* page_ptr = buffer_pool_manager_->FetchPage(page_id);
 	assert (page_ptr != nullptr);
+	// lookup acquires a read lock
+	page_ptr->RLatch();
+	Page* save_ptr = page_ptr;
 	BPlusTreePage* pg = reinterpret_cast<BPlusTreePage*>
 		(page_ptr->GetData());
-	Page* save_ptr;
 
 	// for an internal node, we need to keep going down the tree
 	// till we hit the leaf node
 	while (pg->IsLeafPage() == false)
 	{
-		// lookup acquires a read lock
-		page_ptr->RLatch();
-		save_ptr = page_ptr;
-
 		BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator>* internal =
 			reinterpret_cast<BPlusTreeInternalPage<KeyType, page_id_t,
 			KeyComparator>*>(pg);
@@ -87,7 +85,6 @@ bool BPLUSTREE_TYPE::GetValue(const KeyType &key,
 		LOG_DEBUG("fetching page id %d", page_id);
 		page_ptr = buffer_pool_manager_->FetchPage(page_id);
 		assert (page_ptr != nullptr);
-		pg = reinterpret_cast<BPlusTreePage*>(page_ptr->GetData());
 		save_ptr->RUnlatch();
 		buffer_pool_manager_->UnpinPage(save_ptr->GetPageId(), false);
 		if (is_locked == true)
@@ -95,10 +92,10 @@ bool BPLUSTREE_TYPE::GetValue(const KeyType &key,
 			mtx_.unlock();
 			is_locked = false;
 		}
+		page_ptr->RLatch();
+		save_ptr = page_ptr;
+		pg = reinterpret_cast<BPlusTreePage*>(page_ptr->GetData());
 	}
-
-	page_ptr->RLatch();
-	save_ptr = page_ptr;
 
 	B_PLUS_TREE_LEAF_PAGE_TYPE* const leaf =
 		reinterpret_cast<B_PLUS_TREE_LEAF_PAGE_TYPE*>(pg);
