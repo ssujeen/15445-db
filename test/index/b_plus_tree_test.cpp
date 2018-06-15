@@ -48,7 +48,7 @@ TEST(BPlusTreeTests, InsertTest1) {
   for (auto key : keys) {
     rids.clear();
     index_key.SetFromInteger(key);
-    tree.GetValue(index_key, rids);
+    tree.GetValue(index_key, rids, transaction);
 	assert (transaction->GetPageSet()->size() == 0);
     EXPECT_EQ(rids.size(), 1);
 
@@ -186,7 +186,7 @@ TEST(BPlusTreeTests, InsertTest31) {
   for (auto key : keys) {
     rids.clear();
     index_key.SetFromInteger(key);
-    tree.GetValue(index_key, rids);
+    tree.GetValue(index_key, rids, transaction);
 	assert (transaction->GetPageSet()->size() == 0);
     EXPECT_EQ(rids.size(), 1);
 
@@ -244,7 +244,7 @@ TEST(BPlusTreeTests, InsertTest2) {
   for (auto key : keys) {
     rids.clear();
     index_key.SetFromInteger(key);
-    tree.GetValue(index_key, rids);
+    tree.GetValue(index_key, rids, transaction);
 	assert (transaction->GetPageSet()->size() == 0);
     EXPECT_EQ(rids.size(), 1);
 
@@ -316,7 +316,7 @@ TEST(BPlusTreeTests, InsertTest22) {
   for (auto key : keys) {
     rids.clear();
     index_key.SetFromInteger(key);
-    tree.GetValue(index_key, rids);
+    tree.GetValue(index_key, rids, transaction);
 	assert (transaction->GetPageSet()->size() == 0);
     EXPECT_EQ(rids.size(), 1);
 
@@ -392,7 +392,7 @@ TEST(BPlusTreeTests, InsertTestShuffle) {
   for (auto key : keys) {
     rids.clear();
     index_key.SetFromInteger(key);
-    tree.GetValue(index_key, rids);
+    tree.GetValue(index_key, rids, transaction);
 	assert (transaction->GetPageSet()->size() == 0);
     EXPECT_EQ(rids.size(), 1);
 
@@ -461,7 +461,7 @@ TEST(BPlusTreeTests, DeleteTest1) {
   for (auto key : keys) {
     rids.clear();
     index_key.SetFromInteger(key);
-    tree.GetValue(index_key, rids);
+    tree.GetValue(index_key, rids, transaction);
     EXPECT_EQ(rids.size(), 1);
 
     int64_t value = key & 0xFFFFFFFF;
@@ -541,7 +541,7 @@ TEST(BPlusTreeTests, DeleteTest2) {
   for (auto key : keys) {
     rids.clear();
     index_key.SetFromInteger(key);
-    tree.GetValue(index_key, rids);
+    tree.GetValue(index_key, rids, transaction);
 	assert (transaction->GetPageSet()->size() == 0);
     EXPECT_EQ(rids.size(), 1);
 
@@ -625,7 +625,7 @@ TEST(BPlusTreeTests, DeleteTestProj3) {
   for (auto key : keys) {
     rids.clear();
     index_key.SetFromInteger(key);
-    tree.GetValue(index_key, rids);
+    tree.GetValue(index_key, rids, transaction);
 	assert (transaction->GetPageSet()->size() == 0);
     EXPECT_EQ(rids.size(), 1);
 
@@ -705,7 +705,7 @@ TEST(BPlusTreeTests, DeleteTest3) {
   for (auto key : keys) {
     rids.clear();
     index_key.SetFromInteger(key);
-    tree.GetValue(index_key, rids);
+    tree.GetValue(index_key, rids, transaction);
     EXPECT_EQ(rids.size(), 1);
 
     int64_t value = key & 0xFFFFFFFF;
@@ -784,7 +784,7 @@ TEST(BPlusTreeTests, DeleteTest4) {
   for (auto key : keys) {
     rids.clear();
     index_key.SetFromInteger(key);
-    tree.GetValue(index_key, rids);
+    tree.GetValue(index_key, rids, transaction);
     EXPECT_EQ(rids.size(), 1);
 
     int64_t value = key & 0xFFFFFFFF;
@@ -876,7 +876,7 @@ TEST(BPlusTreeTests, DeleteTest5) {
   for (auto key : keys) {
     rids.clear();
     index_key.SetFromInteger(key);
-    tree.GetValue(index_key, rids);
+    tree.GetValue(index_key, rids, transaction);
     EXPECT_EQ(rids.size(), 1);
 
     int64_t value = key & 0xFFFFFFFF;
@@ -967,7 +967,7 @@ TEST(BPlusTreeTests, DeleteTest6) {
   for (auto key : keys) {
     rids.clear();
     index_key.SetFromInteger(key);
-    tree.GetValue(index_key, rids);
+    tree.GetValue(index_key, rids, transaction);
     EXPECT_EQ(rids.size(), 1);
 
     int64_t value = key & 0xFFFFFFFF;
@@ -1057,7 +1057,7 @@ TEST(BPlusTreeTests, DeleteTest7) {
   for (auto key : keys) {
     rids.clear();
     index_key.SetFromInteger(key);
-    tree.GetValue(index_key, rids);
+    tree.GetValue(index_key, rids, transaction);
     EXPECT_EQ(rids.size(), 1);
 
     int64_t value = key & 0xFFFFFFFF;
@@ -1159,7 +1159,7 @@ TEST(BPlusTreeTests, ScaleTestShuffleLowScale) {
   for (auto key : keys) {
     rids.clear();
     index_key.SetFromInteger(key);
-    tree.GetValue(index_key, rids);
+    tree.GetValue(index_key, rids, transaction);
     EXPECT_EQ(rids.size(), 1);
 
     int64_t value = key & 0xFFFFFFFF;
@@ -1248,7 +1248,7 @@ TEST(BPlusTreeTests, ScaleTestShuffle) {
   for (auto key : keys) {
     rids.clear();
     index_key.SetFromInteger(key);
-    tree.GetValue(index_key, rids);
+    tree.GetValue(index_key, rids, transaction);
     EXPECT_EQ(rids.size(), 1);
 
     int64_t value = key & 0xFFFFFFFF;
@@ -1327,7 +1327,7 @@ TEST(BPlusTreeTests, ScaleTest) {
   for (auto key : keys) {
     rids.clear();
     index_key.SetFromInteger(key);
-    tree.GetValue(index_key, rids);
+    tree.GetValue(index_key, rids, transaction);
     EXPECT_EQ(rids.size(), 1);
 
     int64_t value = key & 0xFFFFFFFF;
@@ -1411,7 +1411,7 @@ TEST(BPlusTreeTests, ScaleTestShuffle1) {
   for (auto key : keys) {
     rids.clear();
     index_key.SetFromInteger(key);
-    tree.GetValue(index_key, rids);
+    tree.GetValue(index_key, rids, transaction);
     EXPECT_EQ(rids.size(), 1);
 
     int64_t value = key & 0xFFFFFFFF;
@@ -1500,7 +1500,7 @@ TEST(BPlusTreeTests, ScaleTestShuffleEmptyTree) {
   for (auto key : keys) {
     rids.clear();
     index_key.SetFromInteger(key);
-    tree.GetValue(index_key, rids);
+    tree.GetValue(index_key, rids, transaction);
     EXPECT_EQ(rids.size(), 1);
 
     int64_t value = key & 0xFFFFFFFF;

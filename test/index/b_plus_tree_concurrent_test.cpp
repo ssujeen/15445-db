@@ -63,6 +63,7 @@ void InsertHelperSplit(
       int64_t value = key & 0xFFFFFFFF;
       rid.Set((int32_t)(key >> 32), value);
       index_key.SetFromInteger(key);
+	  std::cout << "tid : " << std::this_thread::get_id() << " Inserting key :" << index_key << std::endl;
       tree.Insert(index_key, rid, transaction);
     }
   }
@@ -114,7 +115,7 @@ TEST(BPlusTreeConcurrentTest, InsertTest1) {
   (void)header_page;
   // keys to Insert
   std::vector<int64_t> keys;
-  int64_t scale_factor = 100;
+  int64_t scale_factor = 2;
   for (int64_t key = 1; key < scale_factor; key++) {
     keys.push_back(key);
   }
@@ -164,7 +165,7 @@ TEST(BPlusTreeConcurrentTest, InsertTest2) {
   (void)header_page;
   // keys to Insert
   std::vector<int64_t> keys;
-  int64_t scale_factor = 100;
+  int64_t scale_factor = 1000;
   for (int64_t key = 1; key < scale_factor; key++) {
     keys.push_back(key);
   }
@@ -175,6 +176,7 @@ TEST(BPlusTreeConcurrentTest, InsertTest2) {
   for (auto key : keys) {
     rids.clear();
     index_key.SetFromInteger(key);
+	std::cout << "Getting value : " << index_key << std::endl;
     tree.GetValue(index_key, rids);
     EXPECT_EQ(rids.size(), 1);
 
@@ -182,6 +184,7 @@ TEST(BPlusTreeConcurrentTest, InsertTest2) {
     EXPECT_EQ(rids[0].GetSlotNum(), value);
   }
 
+  std::cout << "location check" << std::endl;
   int64_t start_key = 1;
   int64_t current_key = start_key;
   index_key.SetFromInteger(start_key);
