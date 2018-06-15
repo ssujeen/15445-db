@@ -423,6 +423,11 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key, Transaction *transaction)
 	// non-empty tree, we need to find the leaf node to remove from
 	Page* page_ptr = buffer_pool_manager_->FetchPage(root_page_id_);
 	assert (page_ptr != nullptr);
+	// lock the page
+	page_ptr->WLatch();
+	// add to the txn's locked page set
+	transaction->AddIntoPageSet(page_ptr);
+
 	BPlusTreePage* pg = reinterpret_cast<BPlusTreePage*>(page_ptr->GetData());
 	BPlusTreeInternalPage<KeyType, page_id_t, KeyComparator>* internal;
 	B_PLUS_TREE_LEAF_PAGE_TYPE* leaf;
@@ -430,35 +435,23 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key, Transaction *transaction)
 
 	while (pg->IsLeafPage() == false)
 	{
-		// lock the page
-		page_ptr->WLatch();
-
-		// std::cout << "Looking up page_id : " << page_ptr->GetPageId() << std::endl;
-		// add to the txn's locked page set
-		transaction->AddIntoPageSet(page_ptr);
 		internal = reinterpret_cast<BPlusTreeInternalPage<KeyType,
 			page_id_t, KeyComparator>*>(pg);
 		child = internal->Lookup(key, comparator_);
 		page_ptr = buffer_pool_manager_->FetchPage(child);
-		// TODO: delete this
-		if (page_ptr == nullptr)
-		{
-			std::cout << "page_id = " << child << std::endl;
-			buffer_pool_manager_->FetchPage(child);
-		}
 		assert (page_ptr != nullptr);
+		// never check for safe delete without first locking the page
+		page_ptr->WLatch();
 		pg = reinterpret_cast<BPlusTreePage*>(page_ptr->GetData());
+
 		auto check_internal = reinterpret_cast<BPlusTreeInternalPage<KeyType,
 			page_id_t, KeyComparator>*>(pg);
 		if (check_internal->SafeDelete() == true)
 		{
 			RemoveLatches(transaction, is_locked, false);
 		}
+		transaction->AddIntoPageSet(page_ptr);
 	}
-
-	// acquire the lock on the leaf page
-	page_ptr->WLatch();
-	transaction->AddIntoPageSet(page_ptr);
 
 	// got the leaf page
 	leaf = reinterpret_cast<B_PLUS_TREE_LEAF_PAGE_TYPE*>(pg);
@@ -476,6 +469,8 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key, Transaction *transaction)
 		{
 			// the page is going to be deleted, no need
 			// to save the changes
+			assert (is_locked == true);
+			is_locked = false;
 			RemoveLatches(transaction, is_locked, false);
 			assert (AdjustRoot(reinterpret_cast<BPlusTreePage*>(leaf)) == true);
 			mtx_.unlock();
@@ -488,11 +483,6 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key, Transaction *transaction)
 	if (leaf->GetParentPageId() != INVALID_PAGE_ID
 		&& (avail_sz <= thresh))
 	{
-		// all the locks on the ancestors must be removed at this point
-		// already
-		assert (is_locked == false);
-		assert (transaction->GetPageSet()->size() == 1);
-
 		RemoveLatches(transaction, is_locked, true);
 		return;
 	}
