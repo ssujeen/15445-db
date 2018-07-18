@@ -9,25 +9,32 @@
 
 namespace cmudb {
 
+// open table
 TableHeap::TableHeap(BufferPoolManager *buffer_pool_manager,
-                     LockManager *lock_manager, page_id_t first_page_id)
+                     LockManager *lock_manager, LogManager *log_manager,
+                     page_id_t first_page_id)
     : buffer_pool_manager_(buffer_pool_manager), lock_manager_(lock_manager),
-      first_page_id_(first_page_id) {
-  if (first_page_id_ == INVALID_PAGE_ID) {
-    auto first_page =
-        static_cast<TablePage *>(buffer_pool_manager_->NewPage(first_page_id_));
-    assert(first_page != nullptr); // todo: abort table creation?
-    first_page->WLatch();
-    LOG_DEBUG("new table page created %d", first_page_id_);
+      log_manager_(log_manager), first_page_id_(first_page_id) {}
 
-    first_page->Init(first_page_id_, PAGE_SIZE);
-    first_page->WUnlatch();
-    buffer_pool_manager_->UnpinPage(first_page_id_, true);
-  }
+// create table
+TableHeap::TableHeap(BufferPoolManager *buffer_pool_manager,
+                     LockManager *lock_manager, LogManager *log_manager,
+                     Transaction *txn)
+    : buffer_pool_manager_(buffer_pool_manager), lock_manager_(lock_manager),
+      log_manager_(log_manager) {
+  auto first_page =
+      static_cast<TablePage *>(buffer_pool_manager_->NewPage(first_page_id_));
+  assert(first_page != nullptr); // todo: abort table creation?
+  first_page->WLatch();
+  LOG_DEBUG("new table page created %d", first_page_id_);
+
+  first_page->Init(first_page_id_, PAGE_SIZE, INVALID_LSN, log_manager_, txn);
+  first_page->WUnlatch();
+  buffer_pool_manager_->UnpinPage(first_page_id_, true);
 }
 
 bool TableHeap::InsertTuple(const Tuple &tuple, RID &rid, Transaction *txn) {
-  if (tuple.size_ + 28 > PAGE_SIZE) { // larger than one page size
+  if (tuple.size_ + 32 > PAGE_SIZE) { // larger than one page size
     txn->SetState(TransactionState::ABORTED);
     return false;
   }
@@ -41,8 +48,8 @@ bool TableHeap::InsertTuple(const Tuple &tuple, RID &rid, Transaction *txn) {
 
   cur_page->WLatch();
   while (!cur_page->InsertTuple(
-      tuple, rid, txn,
-      lock_manager_)) { // fail to insert due to not enough space
+      tuple, rid, txn, lock_manager_,
+      log_manager_)) { // fail to insert due to not enough space
     auto next_page_id = cur_page->GetNextPageId();
     if (next_page_id != INVALID_PAGE_ID) { // valid next page
       cur_page->WUnlatch();
@@ -64,7 +71,7 @@ bool TableHeap::InsertTuple(const Tuple &tuple, RID &rid, Transaction *txn) {
       // std::endl;
       cur_page->SetNextPageId(next_page_id);
       new_page->Init(next_page_id, PAGE_SIZE, cur_page->GetPageId(),
-                     INVALID_PAGE_ID);
+                     log_manager_, txn);
       cur_page->WUnlatch();
       buffer_pool_manager_->UnpinPage(cur_page->GetPageId(), true);
       cur_page = new_page;
@@ -72,7 +79,7 @@ bool TableHeap::InsertTuple(const Tuple &tuple, RID &rid, Transaction *txn) {
   }
   cur_page->WUnlatch();
   buffer_pool_manager_->UnpinPage(cur_page->GetPageId(), true);
-  txn->GetWriteSet()->emplace_back(rid, WType::INSERT, Tuple{RID()}, this);
+  txn->GetWriteSet()->emplace_back(rid, WType::INSERT, Tuple{}, this);
   return true;
 }
 
@@ -85,10 +92,10 @@ bool TableHeap::MarkDelete(const RID &rid, Transaction *txn) {
     return false;
   }
   page->WLatch();
-  page->MarkDelete(rid, txn, lock_manager_);
+  page->MarkDelete(rid, txn, lock_manager_, log_manager_);
   page->WUnlatch();
   buffer_pool_manager_->UnpinPage(page->GetPageId(), true);
-  txn->GetWriteSet()->emplace_back(rid, WType::DELETE, Tuple{RID()}, this);
+  txn->GetWriteSet()->emplace_back(rid, WType::DELETE, Tuple{}, this);
   return true;
 }
 
@@ -100,13 +107,13 @@ bool TableHeap::UpdateTuple(const Tuple &tuple, const RID &rid,
     txn->SetState(TransactionState::ABORTED);
     return false;
   }
-  Tuple old_tuple{RID()};
+  Tuple old_tuple;
   page->WLatch();
-  bool is_updated =
-      page->UpdateTuple(tuple, old_tuple, rid, txn, lock_manager_);
+  bool is_updated = page->UpdateTuple(tuple, old_tuple, rid, txn, lock_manager_,
+                                      log_manager_);
   page->WUnlatch();
   buffer_pool_manager_->UnpinPage(page->GetPageId(), is_updated);
-  if (is_updated)
+  if (is_updated && txn->GetState() != TransactionState::ABORTED)
     txn->GetWriteSet()->emplace_back(rid, WType::UPDATE, old_tuple, this);
   return is_updated;
 }
@@ -116,7 +123,7 @@ void TableHeap::ApplyDelete(const RID &rid, Transaction *txn) {
       buffer_pool_manager_->FetchPage(rid.GetPageId()));
   assert(page != nullptr);
   page->WLatch();
-  page->ApplyDelete(rid, txn);
+  page->ApplyDelete(rid, txn, log_manager_);
   lock_manager_->Unlock(txn, rid);
   page->WUnlatch();
   buffer_pool_manager_->UnpinPage(page->GetPageId(), true);
@@ -127,7 +134,7 @@ void TableHeap::RollbackDelete(const RID &rid, Transaction *txn) {
       buffer_pool_manager_->FetchPage(rid.GetPageId()));
   assert(page != nullptr);
   page->WLatch();
-  page->RollbackDelete(rid, txn);
+  page->RollbackDelete(rid, txn, log_manager_);
   page->WUnlatch();
   buffer_pool_manager_->UnpinPage(page->GetPageId(), true);
 }

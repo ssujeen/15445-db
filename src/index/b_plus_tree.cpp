@@ -64,7 +64,7 @@ bool BPLUSTREE_TYPE::GetValue(const KeyType &key,
 	mtx_.lock();
 	bool is_locked = true;	
 	page_id = root_page_id_;
-	LOG_DEBUG("fetching page_id : %d", page_id);
+	// LOG_DEBUG("fetching page_id : %d", page_id);
 	Page* page_ptr = buffer_pool_manager_->FetchPage(page_id);
 	assert (page_ptr != nullptr);
 	// lookup acquires a read lock
@@ -83,7 +83,7 @@ bool BPLUSTREE_TYPE::GetValue(const KeyType &key,
 		page_id_t page_id = internal->Lookup(key, comparator_);
 
 		// for an internal node, value is always of type page_id_t
-		LOG_DEBUG("fetching page id %d", page_id);
+		// LOG_DEBUG("fetching page id %d", page_id);
 		page_ptr = buffer_pool_manager_->FetchPage(page_id);
 		assert (page_ptr != nullptr);
 		save_ptr->RUnlatch();

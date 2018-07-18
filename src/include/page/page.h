@@ -28,29 +28,17 @@ public:
   inline page_id_t GetPageId() { return page_id_; }
   // get page pin count
   inline int GetPinCount() { return pin_count_; }
+  // method use to latch/unlatch page content
   inline void IncrementPinCount() {pin_count_++;}
   inline void DecrementPinCount() {pin_count_--;}
   inline bool IsDirty() {return is_dirty_;}
   inline void SetDirty(bool dirty) { is_dirty_ = dirty;}
   inline void SetPageId(page_id_t page_id) {page_id_ = page_id;}
-  // method use to latch/unlatch page content
-  inline void WUnlatch()
-  {
-	  rwlatch_.WUnlock();
-  }
-  inline void WLatch()
-  {
-	  rwlatch_.WLock();
-  }
-  inline void RUnlatch()
-  {
-	  rwlatch_.RUnlock();
-
-  }
-  inline void RLatch()
-  {
-	  rwlatch_.RLock();
-  }
+  
+  inline void WUnlatch() { rwlatch_.WUnlock(); }
+  inline void WLatch() { rwlatch_.WLock(); }
+  inline void RUnlatch() { rwlatch_.RUnlock(); }
+  inline void RLatch() { rwlatch_.RLock(); }
   inline void Reset()
   {
 	  pin_count_ = 0;
@@ -63,6 +51,9 @@ public:
   {
 	  return &rwlatch_;
   }
+
+  inline lsn_t GetLSN() { return *reinterpret_cast<lsn_t *>(GetData() + 4); }
+  inline void SetLSN(lsn_t lsn) { memcpy(GetData() + 4, &lsn, 4); }
 
 private:
   // method used by buffer pool manager

@@ -11,15 +11,17 @@ namespace cmudb {
 
 TEST(BufferPoolManagerTest, SampleTest) {
   page_id_t temp_page_id;
-  BufferPoolManager bpm(10, "test.db");
+
+  DiskManager *disk_manager = new DiskManager("test.db");
+  BufferPoolManager bpm(10, disk_manager);
 
   auto page_zero = bpm.NewPage(temp_page_id);
   EXPECT_NE(nullptr, page_zero);
   EXPECT_EQ(0, temp_page_id);
-  
+
   // The test will fail here if the page is null
   ASSERT_NE(nullptr, page_zero);
-  
+
   // change content in page one
   strcpy(page_zero->GetData(), "Hello");
 
@@ -42,7 +44,7 @@ TEST(BufferPoolManagerTest, SampleTest) {
   page_zero = bpm.FetchPage(0);
   // check read content
   EXPECT_EQ(0, strcmp(page_zero->GetData(), "Hello"));
-  
+
   remove("test.db");
 }
 

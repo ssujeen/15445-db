@@ -23,7 +23,7 @@ namespace cmudb {
 INDEX_TEMPLATE_ARGUMENTS
 void B_PLUS_TREE_LEAF_PAGE_TYPE::Init(page_id_t page_id, page_id_t parent_id)
 {
-	const size_t header_size = 24; // 8 byte aligned
+	const size_t header_size = 32; // 8 byte aligned
 	// calculate size to store the mapping array
 	const size_t sz = PAGE_SIZE - header_size;
 	const size_t elems = (sz / sizeof(MappingType));

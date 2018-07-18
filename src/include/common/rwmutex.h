@@ -52,8 +52,6 @@ public:
 
   void RLock() {
     std::unique_lock<mutex_t> lock(mutex_);
-	//std::cout << "writer entered = " << writer_entered_ << std::endl;
-	// std::cout << "reader_count = " << reader_count_ << std::endl;
     while (writer_entered_ || reader_count_ == max_readers_)
       reader_.wait(lock);
     reader_count_++;

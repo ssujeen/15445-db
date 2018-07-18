@@ -1,16 +1,20 @@
 #include "buffer/buffer_pool_manager.h"
+
 namespace cmudb {
 
 /*
  * BufferPoolManager Constructor
+ * When log_manager is nullptr, logging is disabled (for test purpose)
  * WARNING: Do Not Edit This Function
  */
 BufferPoolManager::BufferPoolManager(size_t pool_size,
-                                                 const std::string &db_file)
-    : pool_size_(pool_size), disk_manager_{db_file} {
+                                                 DiskManager *disk_manager,
+                                                 LogManager *log_manager)
+    : pool_size_(pool_size), disk_manager_(disk_manager),
+      log_manager_(log_manager) {
   // a consecutive memory space for buffer pool
   pages_ = new Page[pool_size_];
-  page_table_ = new ExtendibleHash<page_id_t, Page *>(100);
+  page_table_ = new ExtendibleHash<page_id_t, Page *>(BUCKET_SIZE);
   replacer_ = new LRUReplacer<Page *>;
   free_list_ = new std::list<Page *>;
 
@@ -25,24 +29,12 @@ BufferPoolManager::BufferPoolManager(size_t pool_size,
  * WARNING: Do Not Edit This Function
  */
 BufferPoolManager::~BufferPoolManager() {
-  FlushAllPages();
   delete[] pages_;
   delete page_table_;
   delete replacer_;
   delete free_list_;
 }
 
-/**
- * 1. search hash table.
- *  1.1 if exist, pin the page and return immediately
- *  1.2 if no exist, find a replacement entry from either free list or lru
- *      replacer. (NOTE: always find from free list first)
- * 2. If the entry chosen for replacement is dirty, write it back to disk.
- * 3. Delete the entry for the old page from the hash table and insert an entry
- * for the new page.
- * 4. Update page metadata, read page content from disk file and return page
- * pointer
- */
 Page *BufferPoolManager::FetchPage(page_id_t page_id)
 {
 
@@ -93,7 +85,7 @@ Page *BufferPoolManager::FetchPage(page_id_t page_id)
 		if (page->IsDirty())
 		{
 			assert(page->GetPageId() != INVALID_PAGE_ID);
-			disk_manager_.WritePage(page->GetPageId(), page->GetData());
+			disk_manager_->WritePage(page->GetPageId(), page->GetData());
 			page->SetDirty(false);
 			// remove the dirty page from the map
 			auto it = dirty_pages_.find(page->GetPageId());
@@ -112,7 +104,7 @@ Page *BufferPoolManager::FetchPage(page_id_t page_id)
 	}
 
 	// common ops for 2a and 2b
-	disk_manager_.ReadPage(page_id, page->GetData());
+	disk_manager_->ReadPage(page_id, page->GetData());
 	page->SetPageId(page_id);
 	page->IncrementPinCount();
 	assert(page->GetPinCount() == 1);
@@ -189,7 +181,7 @@ bool BufferPoolManager::FlushPage(page_id_t page_id) {
 
 	if (page->IsDirty())
 	{
-		disk_manager_.WritePage(page->GetPageId(), page->GetData());
+		disk_manager_->WritePage(page->GetPageId(), page->GetData());
 		page->SetDirty(false);
 		// remove the dirty page from the map
 		auto it = dirty_pages_.find(page->GetPageId());
@@ -199,31 +191,6 @@ bool BufferPoolManager::FlushPage(page_id_t page_id) {
 
 	latch_.unlock();
 	return true;
-}
-
-/*
- * Used to flush all dirty pages in the buffer pool manager
- */
-void BufferPoolManager::FlushAllPages()
-{
-	latch_.lock();
-
-	std::for_each(begin(dirty_pages_), end(dirty_pages_),
-		[&](std::pair<page_id_t, Page*> elem)
-		{
-			Page* tpage;
-			Page* const& page = elem.second;
-			assert(page->IsDirty() == true);
-			assert(page->GetPageId() != INVALID_PAGE_ID);
-			assert(page_table_->Find(page->GetPageId(), tpage));
-			disk_manager_.WritePage(page->GetPageId(),
-				page->GetData());
-			page->SetDirty(false);
-
-		});
-	dirty_pages_.clear();
-
-	latch_.unlock();
 }
 
 /**
@@ -268,7 +235,7 @@ bool BufferPoolManager::DeletePage(page_id_t page_id) {
 			auto it = dirty_pages_.find(page->GetPageId());
 			if (it != end(dirty_pages_))
 				dirty_pages_.erase(it);
-			disk_manager_.DeallocatePage(page_id);
+			disk_manager_->DeallocatePage(page_id);
 			page->Reset();
 			free_list_->push_front(page);
 			latch_.unlock();
@@ -309,7 +276,7 @@ Page *BufferPoolManager::NewPage(page_id_t &page_id)
 		if (page->IsDirty())
 		{
 			assert(page->GetPageId() != INVALID_PAGE_ID);
-			disk_manager_.WritePage(page->GetPageId(), page->GetData());
+			disk_manager_->WritePage(page->GetPageId(), page->GetData());
 			page->SetDirty(false);
 			// remove the dirty page from the map
 			auto it = dirty_pages_.find(page->GetPageId());
@@ -330,12 +297,12 @@ Page *BufferPoolManager::NewPage(page_id_t &page_id)
 	}
 
 	// don't assign pageId without having a free container
-	const page_id_t pageId = disk_manager_.AllocatePage();
+	const page_id_t pageId = disk_manager_->AllocatePage();
 	page_id = pageId;
 
 	page->Reset();
 	page->SetPageId(pageId);
-	disk_manager_.ReadPage(page->GetPageId(), page->GetData());
+	disk_manager_->ReadPage(page->GetPageId(), page->GetData());
 	page->IncrementPinCount();
 	assert (page->GetPinCount() == 1);
 	page_table_->Insert(pageId, page);

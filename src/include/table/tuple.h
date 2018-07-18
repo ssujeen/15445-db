@@ -23,6 +23,9 @@ class Tuple {
   friend class TableIterator;
 
 public:
+  // Default constructor (to create a dummy tuple)
+  inline Tuple() : allocated_(false), rid_(RID()), size_(0), data_(nullptr) {}
+
   // constructor for table heap tuple
   Tuple(RID rid) : allocated_(false), rid_(rid) {}
 
@@ -32,10 +35,20 @@ public:
   // copy constructor, deep copy
   Tuple(const Tuple &other);
 
+  // assign operator, deep copy
+  Tuple &operator=(const Tuple &other);
+
   ~Tuple() {
     if (allocated_)
       delete[] data_;
+    allocated_ = false;
+    data_ = nullptr;
   }
+  // serialize tuple data
+  void SerializeTo(char *storage) const;
+
+  // deserialize tuple data(deep copy)
+  void DeserializeFrom(const char *storage);
 
   // return RID of current tuple
   inline RID GetRid() const { return rid_; }

@@ -10,7 +10,9 @@
 namespace cmudb {
 
 TEST(HeaderPageTest, UnitTest) {
-  BufferPoolManager *buffer_pool_manager = new BufferPoolManager(20, "test.db");
+  DiskManager *disk_manager = new DiskManager("test.db");
+  BufferPoolManager *buffer_pool_manager =
+      new BufferPoolManager(20, disk_manager);
   page_id_t header_page_id;
   HeaderPage *page =
       static_cast<HeaderPage *>(buffer_pool_manager->NewPage(header_page_id));
@@ -49,5 +51,8 @@ TEST(HeaderPageTest, UnitTest) {
   EXPECT_EQ(page->GetRecordCount(), 0);
 
   delete buffer_pool_manager;
+  delete disk_manager;
+  remove("test.db");
+  remove("test.log");
 }
 } // namespace cmudb

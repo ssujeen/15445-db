@@ -45,7 +45,9 @@ TEST(BptTreeTest, UnitTest) {
   std::string createStmt = "a bigint";
   Schema *key_schema = ParseCreateStatement(createStmt);
   GenericComparator<8> comparator(key_schema);
-  BufferPoolManager *bpm = new BufferPoolManager(100, "test.db");
+
+  DiskManager *disk_manager = new DiskManager("test.db");
+  BufferPoolManager *bpm = new BufferPoolManager(100, disk_manager);
   // create and fetch header_page
   page_id_t page_id;
   auto header_page = bpm->NewPage(page_id);
@@ -96,7 +98,7 @@ TEST(BptTreeTest, UnitTest) {
       break;
     case 'v':
       verbose = !verbose;
-	  std::cout << tree.ToString(verbose) << std::endl;
+      tree.ToString(verbose);
       break;
     // case 'x':
     //   tree.destroyTree();
@@ -114,6 +116,8 @@ TEST(BptTreeTest, UnitTest) {
   bpm->UnpinPage(HEADER_PAGE_ID, true);
   delete bpm;
   delete transaction;
+  delete disk_manager;
   remove("test.db");
+  remove("test.log");
 }
 } // namespace cmudb

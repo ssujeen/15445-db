@@ -11,10 +11,14 @@ namespace cmudb {
  * Header related
  */
 void TablePage::Init(page_id_t page_id, size_t page_size,
-                     page_id_t prev_page_id, page_id_t next_page_id) {
+                     page_id_t prev_page_id, LogManager *log_manager,
+                     Transaction *txn) {
   memcpy(GetData(), &page_id, 4); // set page_id
+  if (ENABLE_LOGGING) {
+    // TODO: add your logging logic here
+  }
   SetPrevPageId(prev_page_id);
-  SetNextPageId(next_page_id);
+  SetNextPageId(INVALID_PAGE_ID);
   SetFreeSpacePointer(page_size);
   SetTupleCount(0);
 }
@@ -24,26 +28,27 @@ page_id_t TablePage::GetPageId() {
 }
 
 page_id_t TablePage::GetPrevPageId() {
-  return *reinterpret_cast<page_id_t *>(GetData() + 4);
-}
-
-page_id_t TablePage::GetNextPageId() {
   return *reinterpret_cast<page_id_t *>(GetData() + 8);
 }
 
+page_id_t TablePage::GetNextPageId() {
+  return *reinterpret_cast<page_id_t *>(GetData() + 12);
+}
+
 void TablePage::SetPrevPageId(page_id_t prev_page_id) {
-  memcpy(GetData() + 4, &prev_page_id, 4);
+  memcpy(GetData() + 8, &prev_page_id, 4);
 }
 
 void TablePage::SetNextPageId(page_id_t next_page_id) {
-  memcpy(GetData() + 8, &next_page_id, 4);
+  memcpy(GetData() + 12, &next_page_id, 4);
 }
 
 /**
  * Tuple related
  */
 bool TablePage::InsertTuple(const Tuple &tuple, RID &rid, Transaction *txn,
-                            LockManager *lock_manager) {
+                            LockManager *lock_manager,
+                            LogManager *log_manager) {
   assert(tuple.size_ > 0);
   if (GetFreeSpaceSize() < tuple.size_) {
     return false; // not enough space
@@ -54,12 +59,13 @@ bool TablePage::InsertTuple(const Tuple &tuple, RID &rid, Transaction *txn,
   for (i = 0; i < GetTupleCount(); ++i) {
     rid.Set(GetPageId(), i);
     if (GetTupleSize(i) == 0) { // empty slot
-      // acquire exclusive lock
-      assert(txn->GetSharedLockSet()->find(rid) ==
-                 txn->GetSharedLockSet()->end() &&
-             txn->GetExclusiveLockSet()->find(rid) ==
-                 txn->GetExclusiveLockSet()->end());
-      assert(lock_manager->LockExclusive(txn, rid));
+      if (ENABLE_LOGGING) {
+        assert(txn->GetSharedLockSet()->find(rid) ==
+                   txn->GetSharedLockSet()->end() &&
+               txn->GetExclusiveLockSet()->find(rid) ==
+                   txn->GetExclusiveLockSet()->end());
+      }
+      break;
     }
   }
 
@@ -75,68 +81,82 @@ bool TablePage::InsertTuple(const Tuple &tuple, RID &rid, Transaction *txn,
   SetTupleSize(i, tuple.size_);
   if (i == GetTupleCount()) {
     rid.Set(GetPageId(), i);
-    assert(lock_manager->LockExclusive(txn, rid.Get()));
     SetTupleCount(GetTupleCount() + 1);
   }
+  // write the log after set rid
+  if (ENABLE_LOGGING) {
+    // acquire the exclusive lock
+    assert(lock_manager->LockExclusive(txn, rid.Get()));
+    // TODO: add your logging logic here
+  }
+  // LOG_DEBUG("Tuple inserted");
   return true;
 }
 
+/*
+ * MarkDelete method does not truly delete a tuple from table page
+ * Instead it set the tuple as 'deleted' by changing the tuple size metadata to
+ * negative so that no other transaction can reuse this slot
+ *
+ */
 bool TablePage::MarkDelete(const RID &rid, Transaction *txn,
-                           LockManager *lock_manager) {
+                           LockManager *lock_manager, LogManager *log_manager) {
   int slot_num = rid.GetSlotNum();
   if (slot_num >= GetTupleCount()) {
-    txn->SetState(TransactionState::ABORTED);
+    if (ENABLE_LOGGING) {
+      txn->SetState(TransactionState::ABORTED);
+    }
     return false;
   }
 
   int32_t tuple_size = GetTupleSize(slot_num);
   if (tuple_size < 0) {
-    txn->SetState(TransactionState::ABORTED);
+    if (ENABLE_LOGGING) {
+      txn->SetState(TransactionState::ABORTED);
+    }
     return false;
   }
 
-  // acquire exclusive lock
-  // if has shared lock
-  if (txn->GetSharedLockSet()->find(rid) != txn->GetSharedLockSet()->end()) {
-    if (!lock_manager->LockUpgrade(txn, rid))
+  if (ENABLE_LOGGING) {
+    // acquire exclusive lock
+    // if has shared lock
+    if (txn->GetSharedLockSet()->find(rid) != txn->GetSharedLockSet()->end()) {
+      if (!lock_manager->LockUpgrade(txn, rid))
+        return false;
+    } else if (txn->GetExclusiveLockSet()->find(rid) ==
+                   txn->GetExclusiveLockSet()->end() &&
+               !lock_manager->LockExclusive(txn, rid)) { // no shared lock
       return false;
-  } else if (txn->GetExclusiveLockSet()->find(rid) ==
-                 txn->GetExclusiveLockSet()->end() &&
-             !lock_manager->LockExclusive(txn, rid)) { // no shared lock
-    return false;
+    }
+    // TODO: add your logging logic here
   }
 
-  // flip size
-  SetTupleSize(slot_num, -tuple_size);
+  // set tuple size to negative value
+  if (tuple_size > 0)
+    SetTupleSize(slot_num, -tuple_size);
   return true;
 }
 
 bool TablePage::UpdateTuple(const Tuple &new_tuple, Tuple &old_tuple,
                             const RID &rid, Transaction *txn,
-                            LockManager *lock_manager) {
+                            LockManager *lock_manager,
+                            LogManager *log_manager) {
   int slot_num = rid.GetSlotNum();
   if (slot_num >= GetTupleCount()) {
-    txn->SetState(TransactionState::ABORTED);
+    if (ENABLE_LOGGING) {
+      txn->SetState(TransactionState::ABORTED);
+    }
     return false;
   }
   int32_t tuple_size = GetTupleSize(slot_num); // old tuple size
   if (tuple_size <= 0) {
-    txn->SetState(TransactionState::ABORTED);
+    if (ENABLE_LOGGING) {
+      txn->SetState(TransactionState::ABORTED);
+    }
     return false;
   }
   if (GetFreeSpaceSize() < new_tuple.size_ - tuple_size) {
     // should delete/insert because not enough space
-    return false;
-  }
-
-  // acquire exclusive lock
-  // if has shared lock
-  if (txn->GetSharedLockSet()->find(rid) != txn->GetSharedLockSet()->end()) {
-    if (!lock_manager->LockUpgrade(txn, rid))
-      return false;
-  } else if (txn->GetExclusiveLockSet()->find(rid) ==
-                 txn->GetExclusiveLockSet()->end() &&
-             !lock_manager->LockExclusive(txn, rid)) { // no shared lock
     return false;
   }
 
@@ -150,6 +170,20 @@ bool TablePage::UpdateTuple(const Tuple &new_tuple, Tuple &old_tuple,
   memcpy(old_tuple.data_, GetData() + tuple_offset, old_tuple.size_);
   old_tuple.rid_ = rid;
   old_tuple.allocated_ = true;
+
+  if (ENABLE_LOGGING) {
+    // acquire exclusive lock
+    // if has shared lock
+    if (txn->GetSharedLockSet()->find(rid) != txn->GetSharedLockSet()->end()) {
+      if (!lock_manager->LockUpgrade(txn, rid))
+        return false;
+    } else if (txn->GetExclusiveLockSet()->find(rid) ==
+                   txn->GetExclusiveLockSet()->end() &&
+               !lock_manager->LockExclusive(txn, rid)) { // no shared lock
+      return false;
+    }
+    // TODO: add your logging logic here
+  }
 
   // update
   int32_t free_space_pointer =
@@ -172,19 +206,37 @@ bool TablePage::UpdateTuple(const Tuple &new_tuple, Tuple &old_tuple,
   return true;
 }
 
-void TablePage::ApplyDelete(const RID &rid, Transaction *txn) {
+/*
+ * ApplyDelete function truly delete a tuple from table page, and make the slot
+ * available for use again.
+ * This function is called when a transaction commits or when you undo insert
+ */
+void TablePage::ApplyDelete(const RID &rid, Transaction *txn,
+                            LogManager *log_manager) {
   int slot_num = rid.GetSlotNum();
   assert(slot_num < GetTupleCount());
+  // the tuple offset of the deleted tuple
+  int32_t tuple_offset = GetTupleOffset(slot_num);
   int32_t tuple_size = GetTupleSize(slot_num);
   if (tuple_size < 0) { // commit delete
     tuple_size = -tuple_size;
   } // else: rollback insert op
 
-  assert(txn->GetExclusiveLockSet()->find(rid) !=
-         txn->GetExclusiveLockSet()->end());
+  // copy out delete value, for undo purpose
+  Tuple delete_tuple;
+  delete_tuple.size_ = tuple_size;
+  delete_tuple.data_ = new char[delete_tuple.size_];
+  memcpy(delete_tuple.data_, GetData() + tuple_offset, delete_tuple.size_);
+  delete_tuple.rid_ = rid;
+  delete_tuple.allocated_ = true;
 
-  int32_t tuple_offset =
-      GetTupleOffset(slot_num); // the tuple offset of the deleted tuple
+  if (ENABLE_LOGGING) {
+    // must already grab the exclusive lock
+    assert(txn->GetExclusiveLockSet()->find(rid) !=
+           txn->GetExclusiveLockSet()->end());
+    // TODO: add your logging logic here
+  }
+
   int32_t free_space_pointer =
       GetFreeSpacePointer(); // old pointer to the free space
   assert(tuple_offset >= free_space_pointer);
@@ -201,38 +253,54 @@ void TablePage::ApplyDelete(const RID &rid, Transaction *txn) {
   }
 }
 
-void TablePage::RollbackDelete(const RID &rid, Transaction *txn) {
+/*
+ * RollbackDelete is a complementary function wrt MarkDelete function.
+ * It flip the tuple size from negative to positive, so that the tuple becomes
+ * visible again.
+ * This function is called when abort a transaction
+ */
+void TablePage::RollbackDelete(const RID &rid, Transaction *txn,
+                               LogManager *log_manager) {
+  if (ENABLE_LOGGING) {
+    // must have already grab the exclusive lock
+    assert(txn->GetExclusiveLockSet()->find(rid) !=
+           txn->GetExclusiveLockSet()->end());
+
+    // TODO: add your logging logic here
+  }
+
   int slot_num = rid.GetSlotNum();
   assert(slot_num < GetTupleCount());
   int32_t tuple_size = GetTupleSize(slot_num);
-  assert(tuple_size < 0); // marked delete
 
-  assert(txn->GetExclusiveLockSet()->find(rid) !=
-         txn->GetExclusiveLockSet()->end());
-
-  // flip size
-  SetTupleSize(slot_num, -tuple_size);
+  // set tuple size to positive value
+  if (tuple_size < 0)
+    SetTupleSize(slot_num, -tuple_size);
 }
 
 bool TablePage::GetTuple(const RID &rid, Tuple &tuple, Transaction *txn,
                          LockManager *lock_manager) {
   int slot_num = rid.GetSlotNum();
   if (slot_num >= GetTupleCount()) {
-    txn->SetState(TransactionState::ABORTED);
+    if (ENABLE_LOGGING)
+      txn->SetState(TransactionState::ABORTED);
     return false;
   }
   int32_t tuple_size = GetTupleSize(slot_num);
   if (tuple_size <= 0) {
-    txn->SetState(TransactionState::ABORTED);
+    if (ENABLE_LOGGING)
+      txn->SetState(TransactionState::ABORTED);
     return false;
   }
 
-  // acquire shared lock
-  if (txn->GetExclusiveLockSet()->find(rid) ==
-          txn->GetExclusiveLockSet()->end() &&
-      txn->GetSharedLockSet()->find(rid) == txn->GetSharedLockSet()->end() &&
-      !lock_manager->LockShared(txn, rid)) {
-    return false;
+  if (ENABLE_LOGGING) {
+    // acquire shared lock
+    if (txn->GetExclusiveLockSet()->find(rid) ==
+            txn->GetExclusiveLockSet()->end() &&
+        txn->GetSharedLockSet()->find(rid) == txn->GetSharedLockSet()->end() &&
+        !lock_manager->LockShared(txn, rid)) {
+      return false;
+    }
   }
 
   int32_t tuple_offset = GetTupleOffset(slot_num);
@@ -278,41 +346,41 @@ bool TablePage::GetNextTupleRid(const RID &cur_rid, RID &next_rid) {
 
 // tuple slots
 int32_t TablePage::GetTupleOffset(int slot_num) {
-  return *reinterpret_cast<int32_t *>(GetData() + 20 + 8 * slot_num);
-}
-
-int32_t TablePage::GetTupleSize(int slot_num) {
   return *reinterpret_cast<int32_t *>(GetData() + 24 + 8 * slot_num);
 }
 
+int32_t TablePage::GetTupleSize(int slot_num) {
+  return *reinterpret_cast<int32_t *>(GetData() + 28 + 8 * slot_num);
+}
+
 void TablePage::SetTupleOffset(int slot_num, int32_t offset) {
-  memcpy(GetData() + 20 + 8 * slot_num, &offset, 4);
+  memcpy(GetData() + 24 + 8 * slot_num, &offset, 4);
 }
 
 void TablePage::SetTupleSize(int slot_num, int32_t offset) {
-  memcpy(GetData() + 24 + 8 * slot_num, &offset, 4);
+  memcpy(GetData() + 28 + 8 * slot_num, &offset, 4);
 }
 
 // free space
 int32_t TablePage::GetFreeSpacePointer() {
-  return *reinterpret_cast<int32_t *>(GetData() + 12);
+  return *reinterpret_cast<int32_t *>(GetData() + 16);
 }
 
 void TablePage::SetFreeSpacePointer(int32_t free_space_pointer) {
-  memcpy(GetData() + 12, &free_space_pointer, 4);
+  memcpy(GetData() + 16, &free_space_pointer, 4);
 }
 
 // tuple count
 int32_t TablePage::GetTupleCount() {
-  return *reinterpret_cast<int32_t *>(GetData() + 16);
+  return *reinterpret_cast<int32_t *>(GetData() + 20);
 }
 
 void TablePage::SetTupleCount(int32_t tuple_count) {
-  memcpy(GetData() + 16, &tuple_count, 4);
+  memcpy(GetData() + 20, &tuple_count, 4);
 }
 
 // for free space calculation
 int32_t TablePage::GetFreeSpaceSize() {
-  return GetFreeSpacePointer() - 20 - GetTupleCount() * 8;
+  return GetFreeSpacePointer() - 24 - GetTupleCount() * 8;
 }
 } // namespace cmudb

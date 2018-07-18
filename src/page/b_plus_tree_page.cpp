@@ -88,4 +88,10 @@ void BPlusTreePage::SetPageId(page_id_t page_id)
 	page_id_ = page_id;
 }
 
+/*
+ * Helper methods to set lsn
+ */
+void BPlusTreePage::SetLSN(lsn_t lsn) { lsn_ = lsn; }
+
+
 } // namespace cmudb

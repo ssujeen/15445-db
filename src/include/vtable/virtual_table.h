@@ -8,6 +8,7 @@
 #include "catalog/schema.h"
 #include "concurrency/transaction_manager.h"
 #include "index/b_plus_tree_index.h"
+#include "logging/log_manager.h"
 #include "sqlite/sqlite3ext.h"
 #include "table/table_heap.h"
 #include "table/tuple.h"
@@ -58,27 +59,66 @@ int VtabCommit(sqlite3_vtab *pVTab);
 
 int VtabBegin(sqlite3_vtab *pVTab);
 
-// global parameters
-struct GlobalParameters {
+// storage engine
+class StorageEngine {
+public:
+  StorageEngine(std::string db_file_name) {
+    ENABLE_LOGGING = false;
+
+    // storage related
+    disk_manager_ = new DiskManager(db_file_name);
+
+    // log related
+    log_manager_ = new LogManager(disk_manager_);
+
+    buffer_pool_manager_ =
+        new BufferPoolManager(BUFFER_POOL_SIZE, disk_manager_, log_manager_);
+
+    // txn related
+    lock_manager_ = new LockManager(true); // S2PL
+    transaction_manager_ = new TransactionManager(lock_manager_, log_manager_);
+  }
+
+  ~StorageEngine() {
+    if (ENABLE_LOGGING)
+      log_manager_->StopFlushThread();
+    delete disk_manager_;
+    delete buffer_pool_manager_;
+    delete log_manager_;
+    delete lock_manager_;
+    delete transaction_manager_;
+  }
+
+  DiskManager *disk_manager_;
   BufferPoolManager *buffer_pool_manager_;
   LockManager *lock_manager_;
   TransactionManager *transaction_manager_;
-  // global transaction, sqlite does not support concurrent transaction
-  Transaction *transaction_;
+  LogManager *log_manager_;
 };
 
-GlobalParameters *global_parameters;
+StorageEngine *storage_engine_;
+// global transaction, sqlite does not support concurrent transaction
+Transaction *global_transaction_ = nullptr;
 
 class VirtualTable {
   friend class Cursor;
 
 public:
   VirtualTable(Schema *schema, BufferPoolManager *buffer_pool_manager,
-               LockManager *lock_manager, Index *index,
+               LockManager *lock_manager, LogManager *log_manager, Index *index,
                page_id_t first_page_id = INVALID_PAGE_ID)
       : schema_(schema), index_(index) {
-    table_heap_ =
-        new TableHeap(buffer_pool_manager, lock_manager, first_page_id);
+    if (first_page_id != INVALID_PAGE_ID) {
+      // reopen an exist table
+      table_heap_ = new TableHeap(buffer_pool_manager, lock_manager,
+                                  log_manager, first_page_id);
+    } else {
+      // create table for the first time
+      Transaction *txn = storage_engine_->transaction_manager_->Begin();
+      table_heap_ =
+          new TableHeap(buffer_pool_manager, lock_manager, log_manager, txn);
+      storage_engine_->transaction_manager_->Commit(txn);
+    }
   }
 
   ~VirtualTable() {

@@ -52,7 +52,7 @@ public:
   Transaction(txn_id_t txn_id)
       : state_(TransactionState::GROWING),
         thread_id_(std::this_thread::get_id()),
-        txn_id_(txn_id), shared_lock_set_{new std::unordered_set<RID>},
+        txn_id_(txn_id), prev_lsn_(INVALID_LSN), shared_lock_set_{new std::unordered_set<RID>},
         exclusive_lock_set_{new std::unordered_set<RID>} {
     // initialize sets
     write_set_.reset(new std::deque<WriteRecord>);
@@ -97,6 +97,10 @@ public:
 
   inline void SetState(TransactionState state) { state_ = state; }
 
+  inline lsn_t GetPrevLSN() { return prev_lsn_; }
+
+  inline void SetPrevLSN(lsn_t prev_lsn) { prev_lsn_ = prev_lsn; }
+
 private:
   TransactionState state_;
   // thread id, single-threaded transactions
@@ -105,6 +109,8 @@ private:
   txn_id_t txn_id_;
   // Below are used by transaction, undo set
   std::shared_ptr<std::deque<WriteRecord>> write_set_;
+  // prev lsn
+  lsn_t prev_lsn_;
 
   // Below are used by concurrent index
   // this deque contains page pointer that was latche during index operation

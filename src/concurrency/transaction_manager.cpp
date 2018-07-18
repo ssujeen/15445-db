@@ -5,7 +5,18 @@
 #include "concurrency/transaction_manager.h"
 #include "table/table_heap.h"
 
+#include <cassert>
 namespace cmudb {
+
+Transaction *TransactionManager::Begin() {
+  Transaction *txn = new Transaction(next_txn_id_++);
+
+  if (ENABLE_LOGGING) {
+    // TODO: write log and update transaction's prev_lsn here
+  }
+
+  return txn;
+}
 
 void TransactionManager::Commit(Transaction *txn) {
   txn->SetState(TransactionState::COMMITTED);
@@ -22,6 +33,11 @@ void TransactionManager::Commit(Transaction *txn) {
   }
   write_set->clear();
 
+  if (ENABLE_LOGGING) {
+    // TODO: write log and update transaction's prev_lsn here
+  }
+
+  // release all the lock
   std::unordered_set<RID> lock_set;
   for (auto item : *txn->GetSharedLockSet())
     lock_set.emplace(item);
@@ -45,7 +61,6 @@ void TransactionManager::Abort(Transaction *txn) {
       table->RollbackDelete(item.rid_, txn);
     } else if (item.wtype_ == WType::INSERT) {
       LOG_DEBUG("rollback insert");
-      // this also release the lock when holding the page latch
       table->ApplyDelete(item.rid_, txn);
     } else if (item.wtype_ == WType::UPDATE) {
       LOG_DEBUG("rollback update");
@@ -55,6 +70,11 @@ void TransactionManager::Abort(Transaction *txn) {
   }
   write_set->clear();
 
+  if (ENABLE_LOGGING) {
+    // TODO: write log and update transaction's prev_lsn here
+  }
+
+  // release all the lock
   std::unordered_set<RID> lock_set;
   for (auto item : *txn->GetSharedLockSet())
     lock_set.emplace(item);

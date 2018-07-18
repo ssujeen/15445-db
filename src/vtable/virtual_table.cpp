@@ -21,8 +21,10 @@ SQLITE_EXTENSION_INIT1
 int VtabCreate(sqlite3 *db, void *pAux, int argc, const char *const *argv,
                sqlite3_vtab **ppVtab, char **pzErr) {
   BufferPoolManager *buffer_pool_manager =
-      global_parameters->buffer_pool_manager_;
-  LockManager *lock_manager = global_parameters->lock_manager_;
+      storage_engine_->buffer_pool_manager_;
+  LockManager *lock_manager = storage_engine_->lock_manager_;
+  LogManager *log_manager = storage_engine_->log_manager_;
+
   // fetch header page from buffer pool
   HeaderPage *header_page =
       static_cast<HeaderPage *>(buffer_pool_manager->FetchPage(HEADER_PAGE_ID));
@@ -45,8 +47,8 @@ int VtabCreate(sqlite3 *db, void *pAux, int argc, const char *const *argv,
     index = ConstructIndex(index_metadata, buffer_pool_manager);
   }
   // create table object, allocate memory space
-  VirtualTable *table =
-      new VirtualTable(schema, buffer_pool_manager, lock_manager, index);
+  VirtualTable *table = new VirtualTable(schema, buffer_pool_manager,
+                                         lock_manager, log_manager, index);
 
   // insert table root page info into header page
   header_page->InsertRecord(std::string(argv[2]), table->GetFirstPageId());
@@ -70,8 +72,9 @@ int VtabConnect(sqlite3 *db, void *pAux, int argc, const char *const *argv,
   Schema *schema = ParseCreateStatement(schema_string);
 
   BufferPoolManager *buffer_pool_manager =
-      global_parameters->buffer_pool_manager_;
-  LockManager *lock_manager = global_parameters->lock_manager_;
+      storage_engine_->buffer_pool_manager_;
+  LockManager *lock_manager = storage_engine_->lock_manager_;
+  LogManager *log_manager = storage_engine_->log_manager_;
 
   // Retrieve table root page info from header page
   HeaderPage *header_page =
@@ -91,8 +94,9 @@ int VtabConnect(sqlite3 *db, void *pAux, int argc, const char *const *argv,
     header_page->GetRootId(index_metadata->GetName(), index_root_id);
     index = ConstructIndex(index_metadata, buffer_pool_manager, index_root_id);
   }
-  VirtualTable *table = new VirtualTable(schema, buffer_pool_manager,
-                                         lock_manager, index, table_root_id);
+  VirtualTable *table =
+      new VirtualTable(schema, buffer_pool_manager, lock_manager, log_manager,
+                       index, table_root_id);
 
   // register virtual table within sqlite system
   schema_string = "CREATE TABLE X(" + schema_string + ");";
@@ -147,13 +151,15 @@ int VtabBestIndex(sqlite3_vtab *tab, sqlite3_index_info *pIdxInfo) {
 int VtabDisconnect(sqlite3_vtab *pVtab) {
   VirtualTable *virtual_table = reinterpret_cast<VirtualTable *>(pVtab);
   delete virtual_table;
+  // delete all the global managers
+  delete storage_engine_;
   return SQLITE_OK;
 }
 
 int VtabOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **ppCursor) {
   // LOG_DEBUG("VtabOpen");
   // if read operation, begin transaction here
-  if (global_parameters->transaction_ == nullptr) {
+  if (global_transaction_ == nullptr) {
     VtabBegin(pVtab);
   }
   VirtualTable *virtual_table = reinterpret_cast<VirtualTable *>(pVtab);
@@ -296,7 +302,7 @@ int VtabUpdate(sqlite3_vtab *pVTab, int argc, sqlite3_value **argv,
 int VtabBegin(sqlite3_vtab *pVTab) {
   // LOG_DEBUG("VtabBegin");
   // create new transaction(write operation will call this method)
-  global_parameters->transaction_ = new Transaction(0);
+  global_transaction_ = storage_engine_->transaction_manager_->Begin();
   return SQLITE_OK;
 }
 
@@ -306,12 +312,12 @@ int VtabCommit(sqlite3_vtab *pVTab) {
   if (transaction == nullptr)
     return SQLITE_OK;
   // get global txn manager
-  auto transaction_manager = global_parameters->transaction_manager_;
-  // invoke transaction manager to delete
+  auto transaction_manager = storage_engine_->transaction_manager_;
+  // invoke transaction manager to commit(this txn can't fail)
   transaction_manager->Commit(transaction);
   // when commit, delete transaction pointer and set to null
   delete transaction;
-  global_parameters->transaction_ = nullptr;
+  global_transaction_ = nullptr;
 
   return SQLITE_OK;
 }
@@ -347,33 +353,23 @@ __declspec(dllexport)
 #endif
     extern "C" int sqlite3_vtable_init(sqlite3 *db, char **pzErrMsg,
                                        const sqlite3_api_routines *pApi) {
-  std::string file_name = "vtable.db";
-  // to check whether file exist or not
-  struct stat buffer;
-  bool is_file_exist = (stat(file_name.c_str(), &buffer) == 0);
-  // BufferPoolManager is a global object share by all the virtual tables
-  BufferPoolManager *buffer_pool_manager =
-      new BufferPoolManager(100, file_name);
   SQLITE_EXTENSION_INIT2(pApi);
-  // create header page from BufferPoolManager if necessary
-  page_id_t header_page_id;
-  HeaderPage *header_page;
-  if (is_file_exist == false) {
-    header_page =
-        static_cast<HeaderPage *>(buffer_pool_manager->NewPage(header_page_id));
-    assert(header_page_id == HEADER_PAGE_ID);
-  }
+  std::string db_file_name = "vtable.db";
+  struct stat buffer;
+  bool is_file_exist = (stat(db_file_name.c_str(), &buffer) == 0);
 
-  (void)header_page;
-  buffer_pool_manager->UnpinPage(HEADER_PAGE_ID, true);
-  // construct global parameters, for now we have buffer_pool_manager and
-  // lock_manager and transaction_manager_
-  global_parameters = new GlobalParameters;
-  global_parameters->buffer_pool_manager_ = buffer_pool_manager;
-  global_parameters->lock_manager_ = new LockManager(true);
-  global_parameters->transaction_manager_ =
-      new TransactionManager(global_parameters->lock_manager_);
-  global_parameters->transaction_ = nullptr;
+  // init storage engine
+  storage_engine_ = new StorageEngine(db_file_name);
+  // start the logging
+  storage_engine_->log_manager_->RunFlushThread();
+  // create header page from BufferPoolManager if necessary
+  if (!is_file_exist) {
+    page_id_t header_page_id;
+    storage_engine_->buffer_pool_manager_->NewPage(header_page_id);
+
+    assert(header_page_id == HEADER_PAGE_ID);
+    storage_engine_->buffer_pool_manager_->UnpinPage(header_page_id, true);
+  }
 
   int rc = sqlite3_create_module(db, "vtable", &VtableModule, nullptr);
   return rc;
@@ -435,7 +431,7 @@ Schema *ParseCreateStatement(const std::string &sql_base) {
     }
   }
   Schema *schema = new Schema(v);
-  LOG_DEBUG("%s", schema->ToString().c_str());
+  // LOG_DEBUG("%s", schema->ToString().c_str());
 
   return schema;
 }
@@ -469,7 +465,7 @@ IndexMetadata *ParseIndexStatement(std::string &sql,
   IndexMetadata *metadata =
       new IndexMetadata(index_name, table_name, schema, key_attrs);
 
-  LOG_DEBUG("%s", metadata->ToString().c_str());
+  // LOG_DEBUG("%s", metadata->ToString().c_str());
   return metadata;
 }
 
@@ -536,6 +532,6 @@ Index *ConstructIndex(IndexMetadata *metadata,
   }
 }
 
-Transaction *GetTransaction() { return global_parameters->transaction_; }
+Transaction *GetTransaction() { return global_transaction_; }
 
 } // namespace cmudb
