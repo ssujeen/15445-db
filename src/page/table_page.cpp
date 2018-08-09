@@ -22,6 +22,8 @@ void TablePage::Init(page_id_t page_id, size_t page_size,
 	  const lsn_t curr_lsn = log_manager->AppendLogRecord(lg);
 	  // update the txn's prev lsn
 	  txn->SetPrevLSN(curr_lsn);
+	  // update the page's lsn
+	  SetLSN(curr_lsn);
   }
   SetPrevPageId(prev_page_id);
   SetNextPageId(INVALID_PAGE_ID);
@@ -101,6 +103,8 @@ bool TablePage::InsertTuple(const Tuple &tuple, RID &rid, Transaction *txn,
 		rid, tuple);
 	const lsn_t curr_lsn = log_manager->AppendLogRecord(lg);
 	txn->SetPrevLSN(curr_lsn);
+    // update the page's lsn
+    SetLSN(curr_lsn);
   }
   return true;
 }
@@ -150,6 +154,8 @@ bool TablePage::MarkDelete(const RID &rid, Transaction *txn,
 		rid, tuple);
 	const lsn_t curr_lsn = log_manager->AppendLogRecord(lg);
 	txn->SetPrevLSN(curr_lsn);
+    // update the page's lsn
+    SetLSN(curr_lsn);
   }
 
   // set tuple size to negative value
@@ -210,6 +216,8 @@ bool TablePage::UpdateTuple(const Tuple &new_tuple, Tuple &old_tuple,
 		rid, old_tuple, new_tuple);
 	const lsn_t curr_lsn = log_manager->AppendLogRecord(lg);
 	txn->SetPrevLSN(curr_lsn);
+    // update the page's lsn
+    SetLSN(curr_lsn);
   }
 
   // update
@@ -270,6 +278,8 @@ void TablePage::ApplyDelete(const RID &rid, Transaction *txn,
 		rid, tuple);
 	const lsn_t curr_lsn = log_manager->AppendLogRecord(lg);
 	txn->SetPrevLSN(curr_lsn);
+    // update the page's lsn
+    SetLSN(curr_lsn);
   }
 
   int32_t free_space_pointer =
@@ -310,6 +320,8 @@ void TablePage::RollbackDelete(const RID &rid, Transaction *txn,
 		rid, tuple);
 	const lsn_t curr_lsn = log_manager->AppendLogRecord(lg);
 	txn->SetPrevLSN(curr_lsn);
+    // update the page's lsn
+    SetLSN(curr_lsn);
   }
 
   int slot_num = rid.GetSlotNum();
