@@ -41,6 +41,7 @@ public:
   void FlushThread();
   void wake_flush_thread();
   void add_promise(std::promise<void> &promise);
+  void add_promise_lsn(std::promise<lsn_t> &promise);
 
   // append a log record into log buffer
   lsn_t AppendLogRecord(LogRecord &log_record);
@@ -67,6 +68,9 @@ private:
 
   // vector of promise objects
   std::vector<std::promise<void>> vec_;
+
+  // vector of promise lsn objects
+  std::vector<std::promise<lsn_t>> pvec_;
 
   // latch to protect shared member variables
   std::mutex latch_;

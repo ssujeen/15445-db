@@ -46,6 +46,13 @@ void LogManager::FlushThread()
 		// update the persistent_lsn_
 		persistent_lsn_ = next_lsn_;
 
+		// notify threads for group commit
+		for (uint32_t i = 0; i < (pvec_.size() - 1); i++)
+		{
+			pvec_[i].set_value(persistent_lsn_);
+		}
+		pvec_.clear();
+
 		lg.unlock();
 	}
 }
@@ -122,6 +129,16 @@ void LogManager::add_promise(std::promise<void> &promise)
 
 	lg.lock();
 	vec_.push_back(std::move(promise));
+	lg.unlock();
+}
+
+// add a promise that will set a value
+void LogManager::add_promise_lsn(std::promise<lsn_t> &promise)
+{
+	std::unique_lock<std::mutex> lg(latch_);
+
+	lg.lock();
+	pvec_.push_back(std::move(promise));
 	lg.unlock();
 }
 

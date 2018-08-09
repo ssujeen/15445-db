@@ -44,6 +44,21 @@ void TransactionManager::Commit(Transaction *txn) {
 	  // commit is the last step in the transaction, we don't need to update
 	  // the txn's prev lsn at this point
 	  log_manager_->AppendLogRecord(lg);
+
+	  // add a promise, and wait for LOG_TIMEOUT or buffer flush
+	  // the idea is not to force a log flush thereby saving a fsync
+	  // instead wait for a log flush event to happen like timeout/buffer full
+	  while (true)
+	  {
+	  	std::promise<lsn_t> pr;
+	  	std::future<lsn_t> fut = pr.get_future();
+	  	log_manager_->add_promise_lsn(pr);
+
+		lsn_t last_lsn = fut.get();
+		// if our log record is in the disk, we can move forward
+		if (last_lsn >= prev_lsn)
+			break;
+	  }
   }
 
   // release all the lock
