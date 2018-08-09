@@ -92,6 +92,18 @@ Page *BufferPoolManager::FetchPage(page_id_t page_id)
 			assert(it != end(dirty_pages_));
 			dirty_pages_.erase(it);
 		}
+
+		// we also need to check if the pageLSN is > persistent_lsn_
+		if (page->GetLSN() > log_manager_->GetPersistentLSN())
+		{
+			std::promise<void> promise;
+			std::future<void> fut = promise.get_future();
+			log_manager_->add_promise(promise);
+			log_manager_->wake_flush_thread();
+			// we *must* wait for the flush to be over before we can
+			// retire things to disk
+			fut.get();
+		}
 		// once we remove an entry from the LRU, we shouldn't be able to reference
 		// the page with the page_id from before, since we will use that container
 		// to store the contents of a different page id

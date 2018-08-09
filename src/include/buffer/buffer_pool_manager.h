@@ -11,6 +11,7 @@
 #include <mutex>
 #include <map>
 #include <algorithm>
+#include <future>
 
 #include "buffer/lru_replacer.h"
 #include "disk/disk_manager.h"

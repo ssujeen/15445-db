@@ -12,7 +12,11 @@ Transaction *TransactionManager::Begin() {
   Transaction *txn = new Transaction(next_txn_id_++);
 
   if (ENABLE_LOGGING) {
-    // TODO: write log and update transaction's prev_lsn here
+	  // begin has no prev_lsn
+	  LogRecord lg(txn->GetTransactionId(), INVALID_LSN, LogRecordType::BEGIN);
+	  const lsn_t prev_lsn = log_manager_->AppendLogRecord(lg);
+	  assert (txn->GetPrevLSN() == INVALID_LSN);
+	  txn->SetPrevLSN(prev_lsn);
   }
 
   return txn;
@@ -34,7 +38,12 @@ void TransactionManager::Commit(Transaction *txn) {
   write_set->clear();
 
   if (ENABLE_LOGGING) {
-    // TODO: write log and update transaction's prev_lsn here
+	  const lsn_t prev_lsn = txn->GetPrevLSN();
+	  assert (prev_lsn != INVALID_LSN);
+	  LogRecord lg(txn->GetTransactionId(), prev_lsn, LogRecordType::COMMIT);
+	  // commit is the last step in the transaction, we don't need to update
+	  // the txn's prev lsn at this point
+	  log_manager_->AppendLogRecord(lg);
   }
 
   // release all the lock
@@ -71,7 +80,12 @@ void TransactionManager::Abort(Transaction *txn) {
   write_set->clear();
 
   if (ENABLE_LOGGING) {
-    // TODO: write log and update transaction's prev_lsn here
+	  const lsn_t prev_lsn = txn->GetPrevLSN();
+	  assert (prev_lsn != INVALID_LSN);
+	  LogRecord lg(txn->GetTransactionId(), prev_lsn, LogRecordType::ABORT);
+	  // abort is the last step in the transaction, we don't need to update
+	  // the txn's prev lsn at this point
+	  log_manager_->AppendLogRecord(lg);
   }
 
   // release all the lock

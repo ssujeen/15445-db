@@ -14,16 +14,22 @@ void LogManager::FlushThread()
 	// 3. buffer pool manager evicts a page
 	// whose PageLSN > persistent_lsn_
 
-	std::unique_lock<std::mutex> lg(mtx_);
+	std::unique_lock<std::mutex> lg(latch_);
 
-	while (1)
+	while (ENABLE_LOGGING)
 	{
 		lg.lock();
 		if (cv_.wait_for(lg, std::chrono::seconds(LOG_TIMEOUT), [&] { return flush_ == true;}))
 		{
 			// due to pred success or timeout (when pred is success)
-			disk_manager_.WriteLog(flush_buffer_, sz_);
+			disk_manager_->WriteLog(flush_buffer_, sz_);
 			flush_ = false;
+
+			for (uint32_t i = 0; i < (vec_.size() - 1) ; i++)
+			{
+				vec_[i].set_value();
+			}
+			vec_.clear();
 		}
 		else
 		{
@@ -33,9 +39,12 @@ void LogManager::FlushThread()
 			temp_ = log_buffer_;
 			log_buffer_ = flush_buffer_;
 			flush_buffer_ = temp_;
-			disk_manager_.WriteLog(flush_buffer, bytesWritten_);
+			disk_manager_->WriteLog(flush_buffer_, bytesWritten_);
 			bytesWritten_ = 0;
 		}
+
+		// update the persistent_lsn_
+		persistent_lsn_ = next_lsn_;
 
 		lg.unlock();
 	}
@@ -49,11 +58,72 @@ void LogManager::FlushThread()
  */
 void LogManager::RunFlushThread()
 {
+	std::unique_lock<std::mutex> lg;
+
+	lg.lock();
+	ENABLE_LOGGING = true;
+	lg.unlock();
+	th_ = std::thread(&LogManager::FlushThread, this);
 }
 /*
  * Stop and join the flush thread, set ENABLE_LOGGING = false
  */
-void LogManager::StopFlushThread() {}
+void LogManager::StopFlushThread()
+{
+	std::unique_lock<std::mutex> lg;
+
+	lg.lock();
+	ENABLE_LOGGING = false;
+	lg.unlock();
+
+	th_.join();
+}
+
+/*
+ * Wake the flush thread
+ */
+void LogManager::wake_flush_thread()
+{
+	std::unique_lock<std::mutex> lg (latch_);
+
+	lg.lock();
+
+	// if flush_ is true, then it just so happens
+	// that another thread has scheduled the log flush
+	// in which case, we need to wait for the flush to become
+	// false and then do the whole thing again to avoid
+	// weird races. because, we might not be able to piggyback
+	// on the older flush.
+	while (flush_ == true)
+	{
+		lg.unlock();
+		std::this_thread::sleep_for(std::chrono::milliseconds(100));
+		lg.lock();
+	}
+
+	flush_ = true;
+	temp_ = log_buffer_;
+	log_buffer_ = flush_buffer_;
+	flush_buffer_ = temp_;
+	sz_ = bytesWritten_;
+	bytesWritten_ = 0;
+	lg.unlock();
+
+	cv_.notify_one();
+}
+
+/*
+ * Add a promise
+ */ 
+
+void LogManager::add_promise(std::promise<void> &promise)
+{
+	std::unique_lock<std::mutex> lg(latch_);
+
+	lg.lock();
+	vec_.push_back(std::move(promise));
+	lg.unlock();
+}
 
 /*
  * append a log record into log buffer
@@ -142,6 +212,7 @@ lsn_t LogManager::AppendLogRecord(LogRecord &log_record)
 	assert ((log_record.size_ + bytesWritten_) <= LOG_BUFFER_SIZE);
 
 	uint32_t offset = bytesWritten_;
+	log_record.lsn_ = next_lsn_;
 	// copy to the log buffer at the right offset
 	memcpy((log_buffer_ + offset), &log_record, 20);
 	offset += 20;

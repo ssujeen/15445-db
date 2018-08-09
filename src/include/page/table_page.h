@@ -64,6 +64,7 @@ public:
   // return tuple (with data pointing to heap) if success
   bool GetTuple(const RID &rid, Tuple &tuple, Transaction *txn,
                 LockManager *lock_manager);
+  bool GetTupleByRid(const RID &rid, Tuple &tuple, Transaction *txn);
 
   /**
    * Tuple iterator
