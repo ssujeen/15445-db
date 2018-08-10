@@ -21,6 +21,8 @@ void LogManager::FlushThread()
 		LOG_DEBUG("ENABLE_LOGGING = %d\n", (bool)ENABLE_LOGGING);
 		if (cv_.wait_for(lg, std::chrono::seconds(LOG_TIMEOUT), [&] { return flush_ == true;}))
 		{
+
+			LOG_DEBUG("Flushing to disk. LOG_BUFFER_SIZE= %d, actual size = %u", LOG_BUFFER_SIZE, sz_);
 			// due to pred success or timeout (when pred is success)
 			disk_manager_->WriteLog(flush_buffer_, sz_);
 			flush_ = false;
@@ -52,6 +54,7 @@ void LogManager::FlushThread()
 
 		// update the persistent_lsn_
 		persistent_lsn_ = next_lsn_;
+		LOG_DEBUG("persistent LSN is %d", persistent_lsn_);
 
 		LOG_DEBUG("no of txns waiting in commit : %lu\n",  pmap_.size());
 		// notify threads for group commit

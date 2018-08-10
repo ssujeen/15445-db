@@ -1,5 +1,5 @@
 #include "buffer/buffer_pool_manager.h"
-
+#include "common/logger.h"
 namespace cmudb {
 
 /*
@@ -96,6 +96,8 @@ Page *BufferPoolManager::FetchPage(page_id_t page_id)
 		// we also need to check if the pageLSN is > persistent_lsn_
 		if (page->GetLSN() > log_manager_->GetPersistentLSN())
 		{
+			LOG_DEBUG("Page LSN is %d and persistent LSN is %d", page->GetLSN(),
+				log_manager_->GetPersistentLSN());
 			std::promise<void> promise;
 			std::future<void> fut = promise.get_future();
 			log_manager_->add_promise(page->GetPageId(), std::move(promise));

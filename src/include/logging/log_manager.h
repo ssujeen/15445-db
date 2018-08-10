@@ -22,7 +22,8 @@ namespace cmudb {
 class LogManager {
 public:
   LogManager(DiskManager *disk_manager)
-      : next_lsn_(0), persistent_lsn_(INVALID_LSN), th_(),
+      : next_lsn_(0), persistent_lsn_(INVALID_LSN), bytesWritten_(0),
+	  sz_(0), th_(),
         disk_manager_(disk_manager) {
     // TODO: you may intialize your own defined member variables here
 	flush_ = false;
@@ -50,7 +51,15 @@ public:
   lsn_t AppendLogRecord(LogRecord &log_record);
 
   // get/set helper functions
-  inline lsn_t GetPersistentLSN() { return persistent_lsn_; }
+  inline lsn_t GetPersistentLSN()
+  {
+	  // GetPersistentLSN() is called by the bufferpool manager
+	  // persistent_lsn_ is set by the FlushThread, so this needs
+	  // to be protected via a mutex
+	  std::lock_guard<std::mutex> lg(latch_);
+	  auto lsn = persistent_lsn_;
+	  return lsn;
+  }
   inline void SetPersistentLSN(lsn_t lsn) { persistent_lsn_ = lsn; }
   inline char *GetLogBuffer() { return log_buffer_; }
 
