@@ -1,7 +1,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
-
+#include <future>
 #include "logging/common.h"
 #include "logging/log_recovery.h"
 #include "vtable/virtual_table.h"
@@ -57,6 +57,82 @@ TEST(LogManagerTest, BasicLogging) {
   remove("test.log");
 }
 
+void StartTransaction(StorageEngine* storage_engine, TableHeap* test_table)
+{
+  LOG_DEBUG("Create a test table");
+  Transaction *txn = storage_engine->transaction_manager_->Begin();
+  LOG_DEBUG("Insert and delete a random tuple");
+
+  std::string createStmt =
+      "a varchar, b smallint, c bigint, d bool, e varchar(16)";
+  Schema *schema = ParseCreateStatement(createStmt);
+  RID rid;
+  Tuple tuple = ConstructTuple(schema);
+  EXPECT_TRUE(test_table->InsertTuple(tuple, rid, txn));
+  EXPECT_TRUE(test_table->MarkDelete(rid, txn));
+  LOG_DEBUG("Commit txn %d", txn->GetTransactionId());
+  storage_engine->transaction_manager_->Commit(txn);
+  delete txn;
+}
+
+TEST(LogManagerTest, LoggingWithGroupCommit) {
+  StorageEngine *storage_engine = new StorageEngine("test.db");
+  EXPECT_FALSE(ENABLE_LOGGING);
+  LOG_DEBUG("Skip system recovering...");
+
+  storage_engine->log_manager_->RunFlushThread();
+  EXPECT_TRUE(ENABLE_LOGGING);
+  LOG_DEBUG("System logging thread running...");
+
+  LOG_DEBUG("Create a test table");
+  Transaction *txn = storage_engine->transaction_manager_->Begin();
+  TableHeap *test_table = new TableHeap(storage_engine->buffer_pool_manager_,
+                                        storage_engine->lock_manager_,
+                                        storage_engine->log_manager_, txn);
+  LOG_DEBUG("Insert and delete a random tuple");
+
+  std::string createStmt =
+      "a varchar, b smallint, c bigint, d bool, e varchar(16)";
+  Schema *schema = ParseCreateStatement(createStmt);
+  RID rid;
+  Tuple tuple = ConstructTuple(schema);
+  EXPECT_TRUE(test_table->InsertTuple(tuple, rid, txn));
+  EXPECT_TRUE(test_table->MarkDelete(rid, txn));
+  LOG_DEBUG("Commit txn %d", txn->GetTransactionId());
+  storage_engine->transaction_manager_->Commit(txn);
+  delete txn;
+
+
+
+  std::future<void> fut1 = std::async(std::launch::async, StartTransaction, storage_engine, test_table);
+  std::future<void> fut2 = std::async(std::launch::async, StartTransaction, storage_engine, test_table);
+  std::future<void> fut3 = std::async(std::launch::async, StartTransaction, storage_engine, test_table);
+
+
+  fut1.get();
+  fut2.get();
+  fut3.get();
+
+
+  storage_engine->log_manager_->StopFlushThread();
+  EXPECT_FALSE(ENABLE_LOGGING);
+  LOG_DEBUG("Turning off flushing thread");
+
+  // some basic manually checking here
+  char buffer[PAGE_SIZE];
+  storage_engine->disk_manager_->ReadLog(buffer, PAGE_SIZE, 0);
+  int32_t size = *reinterpret_cast<int32_t *>(buffer);
+  LOG_DEBUG("size  = %d", size);
+  size = *reinterpret_cast<int32_t *>(buffer + 20);
+  LOG_DEBUG("size  = %d", size);
+  size = *reinterpret_cast<int32_t *>(buffer + 44);
+  LOG_DEBUG("size  = %d", size);
+
+  delete storage_engine;
+  LOG_DEBUG("Teared down the system");
+  remove("test.db");
+  remove("test.log");
+}
 // actually LogRecovery
 TEST(LogManagerTest, RedoTestWithOneTxn) {
   StorageEngine *storage_engine = new StorageEngine("test.db");

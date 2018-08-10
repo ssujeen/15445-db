@@ -12,6 +12,7 @@
 #include <mutex>
 #include <chrono>
 #include <thread>
+#include <unordered_map>
 
 #include "disk/disk_manager.h"
 #include "logging/log_record.h"
@@ -40,8 +41,10 @@ public:
   void StopFlushThread();
   void FlushThread();
   void wake_flush_thread();
-  void add_promise(std::promise<void> &promise);
-  void add_promise_lsn(std::promise<lsn_t> &promise);
+  void add_promise(page_id_t page_id, std::promise<void> promise);
+  void add_promise_lsn(txn_id_t txn_id, std::promise<lsn_t> promise);
+  void remove_promise(page_id_t page_id);
+  void remove_promise_lsn(txn_id_t txn_id);
 
   // append a log record into log buffer
   lsn_t AppendLogRecord(LogRecord &log_record);
@@ -66,11 +69,11 @@ private:
   // thread
   std::thread th_;
 
-  // vector of promise objects
-  std::vector<std::promise<void>> vec_;
+  // map of promise objects
+  std::unordered_map<page_id_t, std::promise<void>> map_;
 
-  // vector of promise lsn objects
-  std::vector<std::promise<lsn_t>> pvec_;
+  // map of promise lsn objects
+  std::unordered_map<txn_id_t, std::promise<lsn_t>> pmap_;
 
   // latch to protect shared member variables
   std::mutex latch_;

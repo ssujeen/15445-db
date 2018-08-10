@@ -378,11 +378,15 @@ bool TablePage::GetTupleByRid(const RID &rid, Tuple &tuple, Transaction *txn)
     return false;
   }
   int32_t tuple_size = GetTupleSize(slot_num);
-  if (tuple_size <= 0) {
+  if (tuple_size == 0) {
     if (ENABLE_LOGGING)
       txn->SetState(TransactionState::ABORTED);
     return false;
   }
+
+  // we could come here after MARKDELETE
+  if (tuple_size < 0)
+	  tuple_size = -tuple_size;
 
   int32_t tuple_offset = GetTupleOffset(slot_num);
   tuple.size_ = tuple_size;

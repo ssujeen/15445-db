@@ -3,7 +3,7 @@
  */
 
 #include "logging/log_manager.h"
-
+#include "common/logger.h"
 namespace cmudb {
 
 void LogManager::FlushThread()
@@ -18,21 +18,28 @@ void LogManager::FlushThread()
 
 	while (ENABLE_LOGGING)
 	{
-		lg.lock();
+		LOG_DEBUG("ENABLE_LOGGING = %d\n", (bool)ENABLE_LOGGING);
 		if (cv_.wait_for(lg, std::chrono::seconds(LOG_TIMEOUT), [&] { return flush_ == true;}))
 		{
 			// due to pred success or timeout (when pred is success)
 			disk_manager_->WriteLog(flush_buffer_, sz_);
 			flush_ = false;
 
-			for (uint32_t i = 0; i < (vec_.size() - 1) ; i++)
+			for (auto iter = map_.begin(); iter != map_.end(); iter++)
 			{
-				vec_[i].set_value();
+				// set the promise, so that the future can get ready
+				iter->second.set_value();
 			}
-			vec_.clear();
 		}
 		else
 		{
+			// avoid unnecessary disk writes
+			if (bytesWritten_ == 0)
+			{
+				LOG_DEBUG("timeout..nothing to flush..");
+				continue;
+			}
+			LOG_DEBUG("flushing log buffer due to timeout..");
 			// due to timeout + pred fail
 			// we do the swap here.
 			assert (flush_ == false);
@@ -46,15 +53,16 @@ void LogManager::FlushThread()
 		// update the persistent_lsn_
 		persistent_lsn_ = next_lsn_;
 
+		LOG_DEBUG("no of txns waiting in commit : %lu\n",  pmap_.size());
 		// notify threads for group commit
-		for (uint32_t i = 0; i < (pvec_.size() - 1); i++)
+		for (auto iter = pmap_.begin(); iter != pmap_.end(); iter++)
 		{
-			pvec_[i].set_value(persistent_lsn_);
+			// set the promise, so that the future can get ready
+			iter->second.set_value(persistent_lsn_);
 		}
-		pvec_.clear();
-
-		lg.unlock();
 	}
+
+	LOG_DEBUG("Stopping flush thread..");
 }
 /*
  * set ENABLE_LOGGING = true
@@ -65,11 +73,7 @@ void LogManager::FlushThread()
  */
 void LogManager::RunFlushThread()
 {
-	std::unique_lock<std::mutex> lg;
-
-	lg.lock();
 	ENABLE_LOGGING = true;
-	lg.unlock();
 	th_ = std::thread(&LogManager::FlushThread, this);
 }
 /*
@@ -77,12 +81,7 @@ void LogManager::RunFlushThread()
  */
 void LogManager::StopFlushThread()
 {
-	std::unique_lock<std::mutex> lg;
-
-	lg.lock();
 	ENABLE_LOGGING = false;
-	lg.unlock();
-
 	th_.join();
 }
 
@@ -93,7 +92,6 @@ void LogManager::wake_flush_thread()
 {
 	std::unique_lock<std::mutex> lg (latch_);
 
-	lg.lock();
 
 	// if flush_ is true, then it just so happens
 	// that another thread has scheduled the log flush
@@ -123,22 +121,35 @@ void LogManager::wake_flush_thread()
  * Add a promise
  */ 
 
-void LogManager::add_promise(std::promise<void> &promise)
+void LogManager::add_promise(page_id_t page_id, std::promise<void> promise)
 {
 	std::unique_lock<std::mutex> lg(latch_);
 
-	lg.lock();
-	vec_.push_back(std::move(promise));
+	map_.insert(std::make_pair(page_id, std::move(promise)));
 	lg.unlock();
 }
 
 // add a promise that will set a value
-void LogManager::add_promise_lsn(std::promise<lsn_t> &promise)
+void LogManager::add_promise_lsn(txn_id_t txn_id, std::promise<lsn_t> promise)
 {
 	std::unique_lock<std::mutex> lg(latch_);
 
-	lg.lock();
-	pvec_.push_back(std::move(promise));
+	pmap_.insert(std::make_pair(txn_id, std::move(promise)));
+	lg.unlock();
+}
+
+// remove a promise
+void LogManager::remove_promise(page_id_t page_id)
+{
+	std::unique_lock<std::mutex> lg(latch_);
+	map_.erase(page_id);
+	lg.unlock();
+}
+
+void LogManager::remove_promise_lsn(txn_id_t txn_id)
+{
+	std::unique_lock<std::mutex> lg(latch_);
+	pmap_.erase(txn_id);
 	lg.unlock();
 }
 
@@ -170,8 +181,6 @@ lsn_t LogManager::AppendLogRecord(LogRecord &log_record)
 
 	std::unique_lock<std::mutex> lg(latch_);
 
-	lg.lock();
-
 	// first check if we have enough space in the log_buffer
 	const LogRecordType type = log_record.log_record_type_;
 	uint32_t updated_sz;
@@ -192,7 +201,7 @@ lsn_t LogManager::AppendLogRecord(LogRecord &log_record)
 
 	if ((bytesWritten_ + log_record.size_) > LOG_BUFFER_SIZE)
 	{
-		if (vec_.empty())
+		if (map_.empty())
 		{
 			flush_ = true;
 			// swap the log and flush buffer
@@ -240,6 +249,7 @@ lsn_t LogManager::AppendLogRecord(LogRecord &log_record)
 	case LogRecordType::BEGIN:
 	case LogRecordType::COMMIT:
 	case LogRecordType::ABORT:
+		break;
 	case LogRecordType::MARKDELETE:
 	case LogRecordType::APPLYDELETE:
 	case LogRecordType::ROLLBACKDELETE:
@@ -272,6 +282,42 @@ lsn_t LogManager::AppendLogRecord(LogRecord &log_record)
 	t_lsn = next_lsn_;
 	next_lsn_ += updated_sz;
 	bytesWritten_ += updated_sz;
+
+	// debug
+	switch (type)
+	{
+	case LogRecordType::BEGIN:
+		LOG_DEBUG("Writing BEGIN log record");
+		break;
+	case LogRecordType::COMMIT:
+		LOG_DEBUG("Writing COMMIT log record");
+		break;
+	case LogRecordType::ABORT:
+		LOG_DEBUG("Writing ABORT log record");
+		break;
+	case LogRecordType::MARKDELETE:
+		LOG_DEBUG("Writing MARKDELETE log record");
+		break;
+	case LogRecordType::APPLYDELETE:
+		LOG_DEBUG("Writing APPLYDELETE log record");
+		break;
+	case LogRecordType::ROLLBACKDELETE:
+		LOG_DEBUG("Writing ROLLBACKDELETE log record");
+		break;
+	case LogRecordType::INSERT:
+		LOG_DEBUG("Writing INSERT log record");
+		break;
+	case LogRecordType::UPDATE:
+		LOG_DEBUG("Writing UPDATE log record");
+		break;
+	case LogRecordType::NEWPAGE:
+		LOG_DEBUG("Writing NEWPAGE log record");
+		break;
+	default:
+		LOG_DEBUG("Writing unknown log record");
+		break;
+	}
+	LOG_DEBUG("LSN = %d", t_lsn);
 
 	assert (bytesWritten_ <= LOG_BUFFER_SIZE);
 

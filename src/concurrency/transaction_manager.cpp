@@ -52,13 +52,15 @@ void TransactionManager::Commit(Transaction *txn) {
 	  {
 	  	std::promise<lsn_t> pr;
 	  	std::future<lsn_t> fut = pr.get_future();
-	  	log_manager_->add_promise_lsn(pr);
+	  	log_manager_->add_promise_lsn(txn->GetTransactionId(), std::move(pr));
 
 		lsn_t last_lsn = fut.get();
 		// if our log record is in the disk, we can move forward
 		if (last_lsn >= prev_lsn)
 			break;
 	  }
+
+	  log_manager_->remove_promise_lsn(txn->GetTransactionId());
   }
 
   // release all the lock
