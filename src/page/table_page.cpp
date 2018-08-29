@@ -18,7 +18,7 @@ void TablePage::Init(page_id_t page_id, size_t page_size,
 	  const lsn_t prev_lsn = txn->GetPrevLSN();
 	  assert (prev_lsn != INVALID_LSN);
 	  LogRecord lg(txn->GetTransactionId(), prev_lsn,
-	      LogRecordType::NEWPAGE, page_id);
+	      LogRecordType::NEWPAGE, page_id, prev_page_id);
 	  const lsn_t curr_lsn = log_manager->AppendLogRecord(lg);
 	  // update the txn's prev lsn
 	  txn->SetPrevLSN(curr_lsn);

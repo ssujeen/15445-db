@@ -100,6 +100,12 @@ void DiskManager::ReadPage(page_id_t page_id, char *page_data) {
   }
 }
 
+bool DiskManager::CheckPageValid(page_id_t page_id)
+{
+	int offset = page_id * PAGE_SIZE;
+	return offset < GetFileSize(file_name_);
+}
+
 /**
  * Write the contents of the log into disk file
  * Only return when sync is done, and only perform sequence write

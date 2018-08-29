@@ -30,6 +30,7 @@ public:
 
   page_id_t AllocatePage();
   void DeallocatePage(page_id_t page_id);
+  bool CheckPageValid(page_id_t);
 
   int GetNumFlushes() const;
   bool GetFlushState() const;

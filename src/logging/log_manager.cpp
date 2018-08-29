@@ -274,7 +274,10 @@ lsn_t LogManager::AppendLogRecord(LogRecord &log_record)
 		log_record.new_tuple_.SerializeTo(log_buffer_ + offset);
 		break;
 	case LogRecordType::NEWPAGE:
+		LOG_DEBUG("NEWPAGE: size= %d", log_record.size_);
 		memcpy((log_buffer_ + offset), &log_record.prev_page_id_, sizeof(page_id_t));
+		offset += sizeof(page_id_t);
+		memcpy((log_buffer_ + offset), &log_record.page_id_, sizeof(page_id_t));
 		offset += sizeof(page_id_t);
 		break;
 	default:

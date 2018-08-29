@@ -11,7 +11,7 @@ namespace cmudb {
 Transaction *TransactionManager::Begin() {
   Transaction *txn = new Transaction(next_txn_id_++);
 
-  if (ENABLE_LOGGING) {
+  if (ENABLE_LOGGING && log_manager_) {
 	  // begin has no prev_lsn
 	  LogRecord lg(txn->GetTransactionId(), INVALID_LSN, LogRecordType::BEGIN);
 	  const lsn_t prev_lsn = log_manager_->AppendLogRecord(lg);
@@ -37,7 +37,7 @@ void TransactionManager::Commit(Transaction *txn) {
   }
   write_set->clear();
 
-  if (ENABLE_LOGGING) {
+  if (ENABLE_LOGGING && log_manager_) {
 	  const lsn_t prev_lsn = txn->GetPrevLSN();
 	  assert (prev_lsn != INVALID_LSN);
 	  LogRecord lg(txn->GetTransactionId(), prev_lsn, LogRecordType::COMMIT);
@@ -96,7 +96,7 @@ void TransactionManager::Abort(Transaction *txn) {
   }
   write_set->clear();
 
-  if (ENABLE_LOGGING) {
+  if (ENABLE_LOGGING && log_manager_) {
 	  const lsn_t prev_lsn = txn->GetPrevLSN();
 	  assert (prev_lsn != INVALID_LSN);
 	  LogRecord lg(txn->GetTransactionId(), prev_lsn, LogRecordType::ABORT);
